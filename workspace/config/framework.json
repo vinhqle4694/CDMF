@@ -1,0 +1,47 @@
+{
+  "framework": {
+    "id": "cdmf-main",
+    "version": "1.0.0",
+    "vendor": "CDMF Project"
+  },
+  "modules": {
+    "config_path": "/workspace/build/config",
+    "lib_path": "/workspace/build/lib",
+    "auto_install_path": "/workspace/build/modules/auto",
+    "storage_dir": "/workspace/build/config/store",
+    "auto_reload": true
+  },
+  "security": {
+    "enabled": true,
+    "verify_signatures": true,
+    "sandbox_enabled": true,
+    "trust_store": "./config/truststore.p12"
+  },
+  "ipc": {
+    "enabled": true,
+    "default_transport": "unix-socket",
+    "socket_path": "/tmp/cdmf",
+    "shm_path": "/dev/shm/cdmf"
+  },
+  "service": {
+    "cache_size": 1000,
+    "ranking_enabled": true
+  },
+  "event": {
+    "thread_pool_size": 8,
+    "queue_size": 10000,
+    "async_delivery": true
+  },
+  "resource": {
+    "module_max_memory": "256MB",
+    "module_max_cpu": "25"
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "./logs/cdmf.log",
+    "max_size": "10MB",
+    "max_backups": 5,
+    "console_enabled": true,
+    "syslog_enabled": false
+  }
+}

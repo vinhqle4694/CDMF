@@ -1,0 +1,507 @@
+@startuml CDMF_Module_Lifecycle
+
+title CDMF Module Lifecycle - State Machine and Transitions
+
+@startuml Module_State_Machine_Detailed
+title Module State Machine - Complete Transitions
+
+[*] --> INSTALLED : installModule()
+
+state INSTALLED {
+    INSTALLED : Module loaded into memory
+    INSTALLED : Manifest parsed
+    INSTALLED : Dependencies not yet resolved
+    INSTALLED : --
+    INSTALLED : **Allowed Operations:**
+    INSTALLED : - getManifest()
+    INSTALLED : - getSymbolicName()
+    INSTALLED : - getVersion()
+}
+
+state RESOLVED {
+    RESOLVED : Dependencies satisfied
+    RESOLVED : Ready to start
+    RESOLVED : Module context not created
+    RESOLVED : --
+    RESOLVED : **Allowed Operations:**
+    RESOLVED : - start()
+    RESOLVED : - uninstall()
+    RESOLVED : - getDependencies()
+}
+
+state STARTING {
+    STARTING : ModuleActivator.start() executing
+    STARTING : Services being registered
+    STARTING : Resources being initialized
+    STARTING : --
+    STARTING : **Duration:** 1-100ms
+    STARTING : **Timeout:** 10 seconds (configurable)
+}
+
+state ACTIVE {
+    ACTIVE : Module fully operational
+    ACTIVE : Services registered and available
+    ACTIVE : Event listeners active
+    ACTIVE : Resources allocated
+    ACTIVE : --
+    ACTIVE : **Allowed Operations:**
+    ACTIVE : - stop()
+    ACTIVE : - update()
+    ACTIVE : - getServices()
+}
+
+state STOPPING {
+    STOPPING : ModuleActivator.stop() executing
+    STOPPING : Services being unregistered
+    STOPPING : Resources being released
+    STOPPING : Event listeners removed
+    STOPPING : --
+    STOPPING : **Duration:** 1-50ms
+    STOPPING : **Timeout:** 5 seconds (configurable)
+}
+
+state UNINSTALLED {
+    UNINSTALLED : Module removed from framework
+    UNINSTALLED : Memory released
+    UNINSTALLED : Services unregistered
+    UNINSTALLED : **Terminal State**
+}
+
+INSTALLED --> RESOLVED : resolve()\n[dependencies satisfied]
+INSTALLED --> UNINSTALLED : uninstall()\n[before resolution]
+
+RESOLVED --> STARTING : start()
+RESOLVED --> UNINSTALLED : uninstall()
+
+STARTING --> ACTIVE : start complete\n[success]
+STARTING --> RESOLVED : start failed\n[exception]
+
+ACTIVE --> STOPPING : stop()
+ACTIVE --> STOPPING : update()\n[old version]
+
+STOPPING --> RESOLVED : stop complete
+
+UNINSTALLED --> [*]
+
+note right of INSTALLED
+  **Entry Actions:**
+  - Load shared library
+  - Parse manifest
+  - Validate manifest schema
+  - Assign module ID
+  - Register in ModuleRegistry
+
+  **Exit Actions:**
+  - None
+end note
+
+note right of RESOLVED
+  **Entry Actions:**
+  - Resolve dependencies
+  - Build dependency graph
+  - Validate version ranges
+  - Check for cycles
+
+  **Exit Actions:**
+  - None (can return here)
+end note
+
+note right of STARTING
+  **Entry Actions:**
+  - Create ModuleActivator
+  - Create ModuleContext
+  - Fire MODULE_STARTING event
+
+  **During:**
+  - Call activator.start(context)
+  - Module registers services
+  - Module adds event listeners
+
+  **On Success:**
+  - Fire MODULE_STARTED event
+  - Transition to ACTIVE
+
+  **On Failure:**
+  - Log error
+  - Cleanup partial init
+  - Transition back to RESOLVED
+end note
+
+note right of ACTIVE
+  **Entry Actions:**
+  - Update service registry
+  - Fire MODULE_STARTED event
+
+  **While Active:**
+  - Handle service calls
+  - Process events
+  - Maintain resources
+
+  **Exit Actions:**
+  - Prepare for shutdown
+end note
+
+note right of STOPPING
+  **Entry Actions:**
+  - Fire MODULE_STOPPING event
+  - Begin graceful shutdown
+
+  **During:**
+  - Call activator.stop(context)
+  - Unregister services
+  - Remove event listeners
+  - Release resources
+
+  **Exit Actions:**
+  - Fire MODULE_STOPPED event
+  - Destroy activator
+  - Destroy context
+end note
+
+@enduml
+
+@startuml Module_Dependency_Resolution
+title Module Dependency Resolution - Detailed Algorithm
+
+participant "Framework" as FW
+participant "DependencyResolver" as DRES
+participant "Module A\n(no deps)" as MA
+participant "Module B\n(depends on A)" as MB
+participant "Module C\n(depends on B)" as MC
+participant "ModuleRegistry" as MREG
+
+FW -> DRES: resolveAll()
+activate DRES
+
+DRES -> MREG: getModules()
+activate MREG
+MREG --> DRES: [A, B, C]
+deactivate MREG
+
+loop For each module
+    DRES -> DRES: resolve(module)
+    activate DRES
+
+    DRES -> DRES: manifest = module.getManifest()
+    DRES -> DRES: deps = manifest["dependencies"]
+
+    loop For each dependency
+        DRES -> DRES: depName = dep["symbolic-name"]
+        DRES -> DRES: versionRange = dep["version-range"]
+        DRES -> DRES: optional = dep["optional"]
+
+        DRES -> MREG: findCompatibleModule(depName, versionRange)
+        activate MREG
+
+        MREG -> MREG: modules = getModules(depName)
+        loop For each version
+            MREG -> MREG: if versionRange.includes(module.version)
+            MREG -> MREG: bestMatch = highest version
+        end
+
+        alt Module Found
+            MREG --> DRES: depModule
+        else Not Found
+            MREG --> DRES: null
+        end
+        deactivate MREG
+
+        alt Dependency Found
+            DRES -> MREG: addDependency(module, depModule)
+        else Not Found && Required
+            DRES --> FW: throw DependencyException
+        else Not Found && Optional
+            DRES -> DRES: log warning
+        end
+    end
+
+    DRES -> DRES: transitionTo(RESOLVED)
+    deactivate DRES
+end
+
+DRES -> DRES: check for cycles
+activate DRES
+DRES -> DRES: cycles = findCycles()
+alt Cycles Found
+    DRES --> FW: throw CyclicDependencyException
+end
+deactivate DRES
+
+DRES --> FW: all resolved
+deactivate DRES
+
+note right of DRES
+  **Dependency Graph:**
+  ```
+  A (no deps)
+  └─ B (depends on A)
+     └─ C (depends on B)
+  ```
+
+  **Resolution Order:**
+  1. Resolve A (no deps) ✓
+  2. Resolve B (A available) ✓
+  3. Resolve C (B available) ✓
+
+  **Start Order:** A → B → C
+  **Stop Order:** C → B → A
+end note
+
+@enduml
+
+@startuml Module_Start_Stop_Ordering
+title Module Start/Stop Ordering - Topological Sort
+
+participant "Framework" as FW
+participant "DependencyResolver" as DRES
+participant "Module A" as MA
+participant "Module B" as MB
+participant "Module C" as MC
+participant "Module D" as MD
+
+note over MA, MD
+  **Dependency Graph:**
+  A (no deps)
+  B → A
+  C → B
+  D → A
+end note
+
+== Start Sequence (Forward Topological Sort) ==
+
+FW -> DRES: getStartOrder([A, B, C, D])
+activate DRES
+
+DRES -> DRES: buildDependencyGraph()
+activate DRES
+DRES -> DRES: inDegree[A] = 0
+DRES -> DRES: inDegree[B] = 1 (depends on A)
+DRES -> DRES: inDegree[C] = 1 (depends on B)
+DRES -> DRES: inDegree[D] = 1 (depends on A)
+deactivate DRES
+
+DRES -> DRES: zeroInDegree.push(A) // A has no deps
+DRES -> DRES: result = []
+
+loop While zeroInDegree not empty
+    DRES -> DRES: module = zeroInDegree.pop() // A
+    DRES -> DRES: result.append(A)
+
+    loop For each dependent of A
+        DRES -> DRES: inDegree[B]-- // 1 → 0
+        DRES -> DRES: inDegree[D]-- // 1 → 0
+        DRES -> DRES: zeroInDegree.push(B, D)
+    end
+
+    DRES -> DRES: module = zeroInDegree.pop() // B or D
+    DRES -> DRES: result.append(B) // or D
+
+    alt B popped
+        DRES -> DRES: inDegree[C]-- // 1 → 0
+        DRES -> DRES: zeroInDegree.push(C)
+    end
+
+    ' Continue until all processed
+end
+
+DRES --> FW: [A, B, D, C] or [A, D, B, C]
+deactivate DRES
+
+note right of DRES
+  **Valid Start Orders:**
+  - A → B → D → C
+  - A → D → B → C
+  - A → (B,D in parallel) → C
+
+  **Key Property:**
+  Dependencies always start before dependents
+end note
+
+FW -> MA: start()
+activate MA
+MA --> FW: ACTIVE
+deactivate MA
+
+FW -> MB: start()
+activate MB
+MB --> FW: ACTIVE
+deactivate MB
+
+FW -> MD: start()
+activate MD
+MD --> FW: ACTIVE
+deactivate MD
+
+FW -> MC: start()
+activate MC
+MC --> FW: ACTIVE
+deactivate MC
+
+== Stop Sequence (Reverse Topological Sort) ==
+
+FW -> DRES: getStopOrder([A, B, C, D])
+activate DRES
+DRES -> DRES: startOrder = getStartOrder()
+DRES -> DRES: reverse(startOrder)
+DRES --> FW: [C, D, B, A] or [C, B, D, A]
+deactivate DRES
+
+note right of DRES
+  **Stop Order:**
+  Reverse of start order ensures:
+  - Dependents stop before dependencies
+  - No broken references
+  - Clean shutdown
+end note
+
+FW -> MC: stop()
+activate MC
+MC --> FW: RESOLVED
+deactivate MC
+
+FW -> MD: stop()
+activate MD
+MD --> FW: RESOLVED
+deactivate MD
+
+FW -> MB: stop()
+activate MB
+MB --> FW: RESOLVED
+deactivate MB
+
+FW -> MA: stop()
+activate MA
+MA --> FW: RESOLVED
+deactivate MA
+
+@enduml
+
+@startuml Module_Version_Management
+title Module Version Management - Semantic Versioning
+
+class Version {
+    - major_: int
+    - minor_: int
+    - patch_: int
+    - qualifier_: string
+    __
+    + Version(major, minor, patch, qualifier)
+    + toString() : string
+    + isCompatibleWith(other: Version) : bool
+    + operator<(other: Version) : bool
+}
+
+class VersionRange {
+    - minimum_: Version
+    - maximum_: Version
+    - includeMinimum_: bool
+    - includeMaximum_: bool
+    __
+    + parse(rangeString: string) : VersionRange
+    + includes(version: Version) : bool
+}
+
+note top of Version
+  **Semantic Versioning:**
+  MAJOR.MINOR.PATCH[-QUALIFIER]
+
+  **Examples:**
+  - 1.0.0
+  - 1.2.3
+  - 2.0.0-beta
+  - 3.1.4-rc.1
+
+  **Compatibility:**
+  - Same MAJOR: compatible
+  - Different MAJOR: incompatible
+
+  **Comparison:**
+  1.0.0 < 1.0.1 < 1.1.0 < 2.0.0
+end note
+
+note top of VersionRange
+  **Range Syntax:**
+  - [1.0.0, 2.0.0) : 1.0.0 ≤ v < 2.0.0
+  - (1.0.0, 2.0.0] : 1.0.0 < v ≤ 2.0.0
+  - [1.0.0, 2.0.0] : 1.0.0 ≤ v ≤ 2.0.0
+
+  **Examples:**
+  - [1.0.0, 2.0.0) matches:
+    1.0.0 ✓, 1.5.0 ✓, 1.9.9 ✓, 2.0.0 ✗
+
+  - (1.0.0, 1.5.0] matches:
+    1.0.0 ✗, 1.0.1 ✓, 1.5.0 ✓, 1.5.1 ✗
+end note
+
+@startuml Version_Resolution_Example
+
+participant "Module B v2.0.0" as B2
+participant "Module Registry" as MREG
+participant "Dependency Resolver" as DRES
+
+note over B2
+  **Module B Manifest:**
+  ```json
+  {
+    "symbolic-name": "com.example.moduleB",
+    "version": "2.0.0",
+    "dependencies": [
+      {
+        "symbolic-name": "com.example.moduleA",
+        "version-range": "[1.0.0, 2.0.0)",
+        "optional": false
+      }
+    ]
+  }
+  ```
+end note
+
+DRES -> MREG: findCompatibleModule("moduleA", "[1.0.0, 2.0.0)")
+activate MREG
+
+MREG -> MREG: modules = getModules("moduleA")
+note right: Available: [1.0.0, 1.5.0, 1.9.9, 2.0.0, 2.5.0]
+
+loop For each version
+    alt 1.0.0
+        MREG -> MREG: 1.0.0 >= 1.0.0 ✓
+        MREG -> MREG: 1.0.0 < 2.0.0 ✓
+        MREG -> MREG: candidate = 1.0.0
+    end
+    alt 1.5.0
+        MREG -> MREG: 1.5.0 >= 1.0.0 ✓
+        MREG -> MREG: 1.5.0 < 2.0.0 ✓
+        MREG -> MREG: candidate = 1.5.0 (higher)
+    end
+    alt 1.9.9
+        MREG -> MREG: 1.9.9 >= 1.0.0 ✓
+        MREG -> MREG: 1.9.9 < 2.0.0 ✓
+        MREG -> MREG: candidate = 1.9.9 (highest)
+    end
+    alt 2.0.0
+        MREG -> MREG: 2.0.0 >= 1.0.0 ✓
+        MREG -> MREG: 2.0.0 < 2.0.0 ✗
+        MREG -> MREG: excluded
+    end
+    alt 2.5.0
+        MREG -> MREG: 2.5.0 >= 1.0.0 ✓
+        MREG -> MREG: 2.5.0 < 2.0.0 ✗
+        MREG -> MREG: excluded
+    end
+end
+
+MREG --> DRES: Module A v1.9.9 (best match)
+deactivate MREG
+
+note right of DRES
+  **Selection Strategy:**
+  1. Filter by version range
+  2. Select highest version
+  3. Ensures latest compatible version
+end note
+
+@enduml
+
+@enduml
+
+@enduml

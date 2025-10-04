@@ -1,0 +1,83 @@
+/**
+ * @file message.fbs
+ * @brief FlatBuffers schema for IPC messages
+ *
+ * Defines the FlatBuffers schema for serializing CDMF IPC messages.
+ * Optimized for zero-copy deserialization and minimal memory allocations.
+ *
+ * @version 1.0.0
+ * @date 2025-10-03
+ */
+
+namespace cdmf.ipc.flatbuf;
+
+// Message type enumeration
+enum MessageType : byte {
+  UNKNOWN = 0,
+  REQUEST = 1,
+  RESPONSE = 2,
+  EVENT = 3,
+  ERROR = 4,
+  HEARTBEAT = 5,
+  CONTROL = 6
+}
+
+// Message priority levels
+enum MessagePriority : byte {
+  LOW = 0,
+  NORMAL = 1,
+  HIGH = 2,
+  CRITICAL = 3
+}
+
+// Serialization format enumeration
+enum SerializationFormat : byte {
+  BINARY = 0,
+  JSON = 1,
+  PROTOBUF = 2,
+  MESSAGEPACK = 3,
+  CUSTOM = 4
+}
+
+// Message header
+table MessageHeader {
+  message_id: [ubyte];           // 16-byte UUID
+  correlation_id: [ubyte];       // 16-byte UUID
+  timestamp: ulong;              // Microseconds since Unix epoch
+  type: MessageType;
+  priority: MessagePriority;
+  format: SerializationFormat;
+  version: ubyte;
+  flags: uint;
+  payload_size: uint;
+  checksum: uint;
+}
+
+// Message metadata
+table MessageMetadata {
+  source_endpoint: string;
+  destination_endpoint: string;
+  subject: string;
+  content_type: string;
+  expiration: ulong;             // Microseconds since Unix epoch
+  retry_count: uint;
+  max_retries: uint;
+}
+
+// Error information
+table ErrorInfo {
+  error_code: uint;
+  error_message: string;
+  error_category: string;
+  error_context: string;
+}
+
+// Complete message
+table Message {
+  header: MessageHeader;
+  metadata: MessageMetadata;
+  payload: [ubyte];
+  error_info: ErrorInfo;         // Only populated for ERROR messages
+}
+
+root_type Message;

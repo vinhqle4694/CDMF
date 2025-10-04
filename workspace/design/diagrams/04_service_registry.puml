@@ -1,0 +1,658 @@
+@startuml CDMF_Service_Registry
+
+title CDMF Service Registry - Detailed Design
+
+@startuml Service_Registry_Internal_Structure
+title Service Registry - Internal Data Structures
+
+class ServiceRegistry {
+    - services_: map<string, vector<ServiceEntry>>
+    - serviceIdCounter_: atomic<uint64_t>
+    - mutex_: shared_mutex
+    - eventDispatcher_: EventDispatcher*
+    __
+    + registerService(interfaceName, service, module, props) : ServiceRegistration
+    + unregisterService(registration)
+    + getService(interfaceName) : void*
+    + getService(filter) : void*
+    + getServices(interfaceName) : vector<void*>
+    + getServices(filter) : vector<void*>
+    - rankServices(services) : vector<ServiceEntry>
+    - evaluateFilter(entry, filter) : bool
+}
+
+class ServiceEntry {
+    + serviceId: uint64_t
+    + interfaceName: string
+    + service: void*
+    + module: Module*
+    + properties: Properties
+    + ranking: int
+    + registrationTime: timestamp
+    __
+    + matches(filter: LDAPFilter) : bool
+    + compareTo(other: ServiceEntry) : int
+}
+
+class ServiceRegistration {
+    - serviceId_: uint64_t
+    - registry_: ServiceRegistry*
+    - valid_: atomic<bool>
+    __
+    + getServiceId() : uint64_t
+    + getProperties() : Properties
+    + setProperties(props)
+    + unregister()
+    + isValid() : bool
+}
+
+class Properties {
+    - map_: map<string, variant<string, int, bool, double>>
+    __
+    + getString(key, default) : string
+    + getInt(key, default) : int
+    + getBool(key, default) : bool
+    + getDouble(key, default) : double
+    + set(key, value)
+    + contains(key) : bool
+    + keys() : vector<string>
+}
+
+class LDAPFilter {
+    - root_: FilterNode*
+    __
+    + parse(filterString: string) : LDAPFilter
+    + evaluate(properties: Properties) : bool
+    - parseExpression(tokens) : FilterNode*
+}
+
+abstract class FilterNode {
+    + {abstract} evaluate(props: Properties) : bool
+}
+
+class AndNode {
+    - children_: vector<FilterNode*>
+    + evaluate(props: Properties) : bool
+}
+
+class OrNode {
+    - children_: vector<FilterNode*>
+    + evaluate(props: Properties) : bool
+}
+
+class NotNode {
+    - child_: FilterNode*
+    + evaluate(props: Properties) : bool
+}
+
+class CompareNode {
+    - attribute_: string
+    - operator_: CompareOp
+    - value_: variant
+    __
+    + evaluate(props: Properties) : bool
+}
+
+enum CompareOp {
+    EQUAL
+    NOT_EQUAL
+    GREATER
+    GREATER_EQUAL
+    LESS
+    LESS_EQUAL
+    PRESENT
+    SUBSTRING
+}
+
+ServiceRegistry *-- ServiceEntry
+ServiceRegistry --> ServiceRegistration
+ServiceEntry *-- Properties
+ServiceRegistration --> ServiceRegistry
+LDAPFilter *-- FilterNode
+FilterNode <|-- AndNode
+FilterNode <|-- OrNode
+FilterNode <|-- NotNode
+FilterNode <|-- CompareNode
+CompareNode *-- CompareOp
+
+note top of ServiceRegistry
+  **Internal Storage:**
+  - Hash map: interfaceName → vector<ServiceEntry>
+  - Lookup complexity: O(1) for interface, O(n) for filtering
+  - Thread-safe: shared_mutex (multiple readers, single writer)
+
+  **Performance:**
+  - Register: O(log n) insertion + sorting
+  - Lookup by interface: O(1) + O(n log n) ranking
+  - Lookup by filter: O(m) where m = matching services
+  - Unregister: O(n) removal
+end note
+
+note right of ServiceEntry
+  **Ranking Algorithm:**
+  1. Higher service.ranking wins
+  2. If ranking equal, older registration wins
+  3. If time equal, lower serviceId wins
+
+  **Comparison:**
+  ```cpp
+  int compareTo(other) {
+      if (ranking != other.ranking)
+          return ranking > other.ranking ? -1 : 1;
+      if (registrationTime != other.registrationTime)
+          return registrationTime < other.registrationTime ? -1 : 1;
+      return serviceId < other.serviceId ? -1 : 1;
+  }
+  ```
+end note
+
+note right of LDAPFilter
+  **Filter Syntax Examples:**
+  - (objectClass=ILogger)
+  - (&(objectClass=ILogger)(level>=DEBUG))
+  - (|(vendor=Acme)(vendor=Beta))
+  - (!(deprecated=true))
+  - (&(type=database)(|(vendor=MySQL)(vendor=PostgreSQL)))
+
+  **Evaluation:**
+  - Parse filter string into AST
+  - Recursively evaluate tree
+  - Short-circuit AND/OR evaluation
+end note
+
+@enduml
+
+@startuml Service_Registration_Sequence
+title Service Registration - Detailed Sequence
+
+participant "Module A" as MOD
+participant "ModuleActivator" as ACT
+participant "ModuleContext" as CTX
+participant "ServiceRegistry" as REG
+participant "EventDispatcher" as EVT
+
+== Module Start - Service Registration ==
+
+MOD -> ACT: start(context)
+activate ACT
+
+ACT -> ACT: createServiceImpl()
+ACT -> ACT: service = new LoggerServiceImpl()
+
+ACT -> CTX: registerService("com.example.ILogger", service, props)
+activate CTX
+
+note right of CTX
+  Properties:
+  - service.ranking = 10
+  - service.vendor = "Acme"
+  - log.level = "DEBUG"
+end note
+
+CTX -> REG: registerService(interfaceName, service, module, props)
+activate REG
+
+REG -> REG: lock(mutex_) // Write lock
+REG -> REG: serviceId = serviceIdCounter_++
+
+REG -> REG: entry = ServiceEntry{\n  serviceId,\n  interfaceName,\n  service,\n  module,\n  props,\n  ranking,\n  now()\n}
+
+REG -> REG: services_[interfaceName].push_back(entry)
+
+note right of REG
+  **Before Sorting:**
+  services_["com.example.ILogger"] = [
+    {id: 5, ranking: 0, time: T1},
+    {id: 12, ranking: 10, time: T2},  ← new entry
+    {id: 3, ranking: 5, time: T0}
+  ]
+end note
+
+REG -> REG: std::sort(services_[interfaceName].begin(), end(), comparator)
+
+note right of REG
+  **After Sorting (descending):**
+  services_["com.example.ILogger"] = [
+    {id: 12, ranking: 10, time: T2},  ← highest ranking
+    {id: 3, ranking: 5, time: T0},
+    {id: 5, ranking: 0, time: T1}
+  ]
+end note
+
+REG -> REG: registration = ServiceRegistration(serviceId, this)
+REG -> REG: unlock(mutex_)
+
+REG -> EVT: fireEvent(SERVICE_REGISTERED, props)
+activate EVT
+EVT -> EVT: enqueue event
+EVT --> REG:
+deactivate EVT
+
+REG --> CTX: registration
+deactivate REG
+
+CTX --> ACT: registration
+deactivate CTX
+
+ACT -> ACT: store registration for cleanup
+ACT --> MOD:
+deactivate ACT
+
+note over MOD, EVT
+  **Registration Complete:**
+  - Service added to registry
+  - Sorted by ranking
+  - Event dispatched to listeners
+  - Registration handle returned to module
+
+  **Time Complexity:** O(n log n) where n = services with same interface
+end note
+
+@enduml
+
+@startuml Service_Lookup_Ranking
+title Service Lookup - Ranking Algorithm
+
+participant "Client Module" as CLIENT
+participant "ModuleContext" as CTX
+participant "ServiceRegistry" as REG
+
+CLIENT -> CTX: getService("com.example.ILogger")
+activate CTX
+
+CTX -> REG: getService("com.example.ILogger")
+activate REG
+
+REG -> REG: lock_shared(mutex_) // Read lock
+
+REG -> REG: it = services_.find("com.example.ILogger")
+
+alt Interface Found
+    REG -> REG: serviceList = it->second
+
+    note right of REG
+      **Service List (already sorted):**
+      [0] {id: 25, ranking: 100, time: T5, vendor: "Acme"}
+      [1] {id: 12, ranking: 10, time: T2, vendor: "Beta"}
+      [2] {id: 18, ranking: 10, time: T3, vendor: "Gamma"}
+      [3] {id: 5, ranking: 0, time: T1, vendor: "Delta"}
+    end note
+
+    alt List Not Empty
+        REG -> REG: bestService = serviceList[0] // O(1)
+
+        note right of REG
+          **Selected Service:**
+          - Highest ranking (100)
+          - Returns first entry (already sorted)
+          - No additional ranking computation needed
+        end note
+
+        REG -> REG: unlock_shared(mutex_)
+        REG --> CTX: bestService.service
+    else Empty List
+        REG -> REG: unlock_shared(mutex_)
+        REG --> CTX: nullptr
+    end
+else Interface Not Found
+    REG -> REG: unlock_shared(mutex_)
+    REG --> CTX: nullptr
+end
+
+deactivate REG
+
+CTX --> CLIENT: service
+deactivate CTX
+
+note over CLIENT, REG
+  **Lookup Performance:**
+  - Hash map lookup: O(1)
+  - Best service selection: O(1) (pre-sorted)
+  - Total: O(1) for interface-based lookup
+
+  **Thread Safety:**
+  - Multiple concurrent reads allowed
+  - Reads don't block other reads
+end note
+
+@enduml
+
+@startuml LDAP_Filter_Evaluation
+title LDAP Filter Evaluation - Detailed Process
+
+participant "Client" as CLIENT
+participant "ServiceRegistry" as REG
+participant "LDAPFilter" as FILTER
+participant "FilterNode Tree" as TREE
+participant "Properties" as PROPS
+
+== Filter Parsing ==
+
+CLIENT -> FILTER: parse("(&(type=logger)(level>=DEBUG)(!(deprecated=true)))")
+activate FILTER
+
+FILTER -> FILTER: tokenize(filterString)
+note right: Tokens: ['(', '&', '(', 'type', '=', 'logger', ')', ...]
+
+FILTER -> FILTER: buildAST(tokens)
+activate FILTER
+
+note right of FILTER
+  **AST Structure:**
+  ```
+  AndNode
+    ├─ CompareNode(type = logger)
+    ├─ CompareNode(level >= DEBUG)
+    └─ NotNode
+        └─ CompareNode(deprecated = true)
+  ```
+end note
+
+FILTER -> TREE: create tree structure
+activate TREE
+TREE --> FILTER: root node
+deactivate TREE
+
+deactivate FILTER
+
+FILTER --> CLIENT: LDAPFilter instance
+deactivate FILTER
+
+== Filter Evaluation ==
+
+CLIENT -> REG: getServices(filter)
+activate REG
+
+REG -> REG: lock_shared(mutex_)
+REG -> REG: results = []
+
+loop For each interface in services_
+    loop For each service entry
+        REG -> REG: entry = serviceList[i]
+
+        REG -> FILTER: evaluate(entry.properties)
+        activate FILTER
+
+        FILTER -> TREE: root->evaluate(properties)
+        activate TREE
+
+        note right of TREE
+          **Properties:**
+          - type = "logger"
+          - level = "INFO"
+          - deprecated = "false"
+          - vendor = "Acme"
+        end note
+
+        TREE -> TREE: AndNode::evaluate()
+        activate TREE
+
+        TREE -> TREE: child1->evaluate() // type = logger
+        note right: CompareNode: "logger" == "logger" → true
+
+        TREE -> TREE: child2->evaluate() // level >= DEBUG
+        note right
+          CompareNode:
+          - Enum comparison: INFO >= DEBUG
+          - INFO (2) >= DEBUG (1) → true
+        end note
+
+        TREE -> TREE: child3->evaluate() // NOT deprecated
+        activate TREE
+
+        TREE -> TREE: NotNode::evaluate()
+        TREE -> TREE: child->evaluate() // deprecated = true
+        note right: CompareNode: "false" == "true" → false
+        note right: NotNode: NOT false → true
+
+        deactivate TREE
+
+        TREE -> TREE: result = true AND true AND true
+
+        deactivate TREE
+
+        TREE --> FILTER: true
+        deactivate TREE
+
+        FILTER --> REG: matches = true
+        deactivate FILTER
+
+        alt Matches Filter
+            REG -> REG: results.push_back(entry)
+        end
+    end
+end
+
+REG -> REG: rankServices(results)
+note right: Sort by ranking (descending)
+
+REG -> REG: unlock_shared(mutex_)
+REG --> CLIENT: vector<Service*>
+deactivate REG
+
+note over CLIENT, PROPS
+  **Evaluation Complexity:**
+  - Parse filter: O(f) where f = filter length (one-time)
+  - Evaluate per service: O(d) where d = filter depth
+  - Total: O(n × d) where n = total services
+
+  **Optimization:**
+  - Short-circuit AND/OR evaluation
+  - Pre-compiled filter AST (reusable)
+  - Indexed properties for fast lookup
+end note
+
+@enduml
+
+@startuml ServiceTracker_Operation
+title ServiceTracker - Automatic Service Discovery
+
+participant "Module" as MOD
+participant "ServiceTracker<T>" as TRACKER
+participant "ServiceRegistry" as REG
+participant "EventDispatcher" as EVT
+
+== ServiceTracker Initialization ==
+
+MOD -> TRACKER: new ServiceTracker<ILogger>(context, filter)
+activate TRACKER
+
+TRACKER -> TRACKER: filter_ = parse("(level>=DEBUG)")
+TRACKER -> TRACKER: services_ = map<uint64_t, T*>()
+
+TRACKER -> EVT: addEventListener(SERVICE_REGISTERED, this)
+activate EVT
+EVT --> TRACKER: listener registered
+deactivate EVT
+
+TRACKER -> EVT: addEventListener(SERVICE_UNREGISTERED, this)
+activate EVT
+EVT --> TRACKER: listener registered
+deactivate EVT
+
+TRACKER -> REG: getServices(filter)
+activate REG
+REG --> TRACKER: [service1, service2, service3]
+deactivate REG
+
+loop For each service
+    TRACKER -> TRACKER: addService(service)
+    TRACKER -> TRACKER: services_[serviceId] = service
+end
+
+TRACKER --> MOD: tracker instance
+deactivate TRACKER
+
+== Service Added Event ==
+
+EVT -> TRACKER: onEvent(SERVICE_REGISTERED, event)
+activate TRACKER
+
+TRACKER -> TRACKER: serviceId = event["service.id"]
+TRACKER -> TRACKER: properties = event.properties
+
+TRACKER -> TRACKER: if filter_.evaluate(properties)
+
+alt Matches Filter
+    TRACKER -> REG: getService(serviceId)
+    activate REG
+    REG --> TRACKER: service
+    deactivate REG
+
+    TRACKER -> TRACKER: services_[serviceId] = service
+
+    TRACKER -> MOD: addingService(service) // callback
+    activate MOD
+    MOD --> TRACKER:
+    deactivate MOD
+end
+
+deactivate TRACKER
+
+== Service Removed Event ==
+
+EVT -> TRACKER: onEvent(SERVICE_UNREGISTERED, event)
+activate TRACKER
+
+TRACKER -> TRACKER: serviceId = event["service.id"]
+TRACKER -> TRACKER: it = services_.find(serviceId)
+
+alt Service Tracked
+    TRACKER -> TRACKER: service = it->second
+    TRACKER -> TRACKER: services_.erase(it)
+
+    TRACKER -> MOD: removedService(service) // callback
+    activate MOD
+    MOD --> TRACKER:
+    deactivate MOD
+end
+
+deactivate TRACKER
+
+== Using Tracked Services ==
+
+MOD -> TRACKER: getServices()
+activate TRACKER
+
+TRACKER -> TRACKER: result = []
+loop For each entry in services_
+    TRACKER -> TRACKER: result.push_back(entry.second)
+end
+
+TRACKER --> MOD: vector<T*>
+deactivate TRACKER
+
+note over MOD, EVT
+  **ServiceTracker Benefits:**
+  - Automatic service discovery
+  - Filter-based matching
+  - Event-driven updates
+  - Type-safe access
+
+  **Use Cases:**
+  - Plugin discovery
+  - Dynamic service dependencies
+  - Service aggregation
+end note
+
+@enduml
+
+@startuml Service_Unregistration_Cleanup
+title Service Unregistration - Cleanup Process
+
+participant "Module" as MOD
+participant "ServiceRegistration" as SREG
+participant "ServiceRegistry" as REG
+participant "EventDispatcher" as EVT
+participant "ServiceTrackers" as TRACKERS
+
+== Module Stop - Service Cleanup ==
+
+MOD -> MOD: stop(context)
+activate MOD
+
+loop For each ServiceRegistration
+    MOD -> SREG: unregister()
+    activate SREG
+
+    SREG -> SREG: expected = true
+    SREG -> SREG: if valid_.compare_exchange_strong(expected, false)
+
+    alt Was Valid
+        SREG -> REG: unregisterService(serviceId_)
+        activate REG
+
+        REG -> REG: lock(mutex_) // Write lock
+
+        REG -> REG: it = services_.find(interfaceName)
+
+        loop Search for service by ID
+            REG -> REG: entry = serviceList[i]
+            alt entry.serviceId == serviceId
+                REG -> REG: serviceList.erase(i)
+                note right: O(n) removal
+            end
+        end
+
+        note right of REG
+          **After Removal:**
+          services_["com.example.ILogger"] = [
+            {id: 25, ranking: 100},
+            {id: 18, ranking: 10}
+          ]
+          (Service id:12 removed)
+        end note
+
+        alt List Empty After Removal
+            REG -> REG: services_.erase(interfaceName)
+            note right: Remove interface entry entirely
+        end
+
+        REG -> REG: unlock(mutex_)
+
+        REG -> EVT: fireEvent(SERVICE_UNREGISTERED, props)
+        activate EVT
+
+        EVT -> TRACKERS: notify all listeners
+        activate TRACKERS
+
+        note right of TRACKERS
+          All ServiceTrackers monitoring
+          this interface receive notification
+          and update their internal caches
+        end note
+
+        TRACKERS --> EVT:
+        deactivate TRACKERS
+
+        EVT --> REG:
+        deactivate EVT
+
+        REG --> SREG:
+        deactivate REG
+    else Already Invalid
+        SREG -> SREG: // No-op, already unregistered
+    end
+
+    SREG --> MOD:
+    deactivate SREG
+end
+
+MOD -> MOD: cleanup complete
+deactivate MOD
+
+note over MOD, TRACKERS
+  **Cleanup Guarantees:**
+  - Thread-safe unregistration (CAS)
+  - Idempotent (safe to call multiple times)
+  - Event notification to all trackers
+  - Automatic interface removal if empty
+
+  **Performance:**
+  - Unregister: O(n) per interface
+  - Event dispatch: O(m) where m = listeners
+end note
+
+@enduml
+
+@enduml

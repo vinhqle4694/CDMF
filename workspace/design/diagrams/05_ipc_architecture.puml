@@ -1,0 +1,1171 @@
+@startuml CDMF_IPC_Architecture
+
+title CDMF IPC Architecture - Detailed Design
+
+@startuml IPC_Transport_Comparison
+title IPC Transport Layer - Performance Comparison
+
+package "Unix Domain Sockets" #LightBlue {
+    [UnixSocketTransport] as UNIX
+
+    note right of UNIX
+      **Performance:**
+      - Latency: 50-100 μs
+      - Throughput: 1 GB/s
+      - Message size: up to 256 KB
+
+      **Characteristics:**
+      - Stream-oriented (SOCK_STREAM)
+      - Full-duplex
+      - Reliable, ordered delivery
+      - Kernel-based buffering
+
+      **Use Cases:**
+      - General-purpose IPC
+      - Request/response patterns
+      - Balanced performance
+
+      **Implementation:**
+      ```cpp
+      socket(AF_UNIX, SOCK_STREAM, 0)
+      bind("/tmp/cdmf-ipc.sock")
+      listen(128)
+      accept() / connect()
+      ```
+    end note
+}
+
+package "Shared Memory" #LightGreen {
+    [SharedMemoryTransport] as SHM
+
+    note right of SHM
+      **Performance:**
+      - Latency: 10-20 μs
+      - Throughput: 10 GB/s
+      - Message size: up to 1 MB
+
+      **Characteristics:**
+      - Zero-copy transfer
+      - Lock-free ring buffer
+      - Memory-mapped file
+      - Atomic operations
+
+      **Use Cases:**
+      - High-frequency calls
+      - Large data transfers
+      - Low-latency requirements
+
+      **Implementation:**
+      ```cpp
+      shm_open("/cdmf-shm", O_CREAT)
+      ftruncate(fd, size)
+      mmap(addr, size, PROT_RW)
+      Ring buffer with CAS
+      ```
+    end note
+}
+
+package "gRPC" #LightCoral {
+    [GrpcTransport] as GRPC
+
+    note right of GRPC
+      **Performance:**
+      - Latency: 1-10 ms
+      - Throughput: 100 MB/s
+      - Message size: up to 4 MB
+
+      **Characteristics:**
+      - HTTP/2 based
+      - TLS 1.3 encryption
+      - Load balancing
+      - Cross-network support
+
+      **Use Cases:**
+      - Remote services
+      - Secure communication
+      - Cross-host deployment
+
+      **Implementation:**
+      - Protocol Buffers IDL
+      - Auto-generated stubs
+      - Bidirectional streaming
+      - mTLS authentication
+    end note
+}
+
+cloud "Selection Criteria" as CRITERIA
+
+CRITERIA --> UNIX : < 100 μs, same host
+CRITERIA --> SHM : < 20 μs, high freq
+CRITERIA --> GRPC : remote, secure
+
+note bottom of CRITERIA
+  **Transport Selection Algorithm:**
+
+  ```cpp
+  Transport* selectTransport(ServiceRef ref) {
+      if (ref.isRemote()) {
+          return new GrpcTransport(ref.host, ref.port);
+      } else if (ref.requiresHighPerformance()) {
+          return new SharedMemoryTransport(ref.shmName);
+      } else {
+          return new UnixSocketTransport(ref.socketPath);
+      }
+  }
+  ```
+
+  **Decision Factors:**
+  - Call frequency (calls/second)
+  - Message size (bytes)
+  - Latency requirements (μs)
+  - Security requirements (encryption)
+  - Deployment model (local vs remote)
+end note
+
+@enduml
+
+@startuml IPC_Message_Format
+title IPC Message Format - Wire Protocol
+
+class Message {
+    - header_: MessageHeader
+    - payload_: vector<uint8_t>
+    - serializer_: ISerializer*
+    __
+    + serialize() : vector<uint8_t>
+    + deserialize(data: vector<uint8_t>) : Message
+    + getType() : MessageType
+    + getPayload() : vector<uint8_t>
+}
+
+class MessageHeader {
+    + magic: uint32_t
+    + version: uint16_t
+    + messageType: MessageType
+    + messageId: uint64_t
+    + payloadSize: uint32_t
+    + checksumType: ChecksumType
+    + checksum: uint32_t
+    + timestamp: uint64_t
+    + flags: uint32_t
+    __
+    + serialize() : array<uint8_t, 32>
+    + validate() : bool
+}
+
+enum MessageType {
+    REQUEST = 1
+    RESPONSE = 2
+    EVENT = 3
+    HEARTBEAT = 4
+    ERROR = 5
+}
+
+enum ChecksumType {
+    NONE = 0
+    CRC32 = 1
+    HMAC_SHA256 = 2
+}
+
+interface ISerializer {
+    + serialize(obj: any) : vector<uint8_t>
+    + deserialize(data: vector<uint8_t>) : any
+    + getFormat() : SerializationFormat
+}
+
+class ProtobufSerializer {
+    - descriptor_: MessageDescriptor*
+    __
+    + serialize(message: Message) : vector<uint8_t>
+    + deserialize(data: vector<uint8_t>) : Message
+}
+
+class FlatBuffersSerializer {
+    - builder_: FlatBufferBuilder
+    __
+    + serialize(message: Message) : vector<uint8_t>
+    + deserialize(data: vector<uint8_t>) : Message
+}
+
+Message *-- MessageHeader
+Message --> ISerializer
+MessageHeader *-- MessageType
+MessageHeader *-- ChecksumType
+ISerializer <|-- ProtobufSerializer
+ISerializer <|-- FlatBuffersSerializer
+
+note top of Message
+  **Wire Format (Total: Header + Payload):**
+  ```
+  ┌──────────────────────────────────────┐
+  │  MessageHeader (32 bytes)            │
+  ├──────────────────────────────────────┤
+  │  Payload (variable, 0 - 4MB)         │
+  └──────────────────────────────────────┘
+  ```
+
+  **Header Layout (32 bytes):**
+  ```
+  Offset  Size  Field
+  ------  ----  -----
+  0       4     magic (0x43444D46 = "CDMF")
+  4       2     version (1.0)
+  6       2     messageType
+  8       8     messageId (unique)
+  16      4     payloadSize
+  20      2     checksumType
+  22      4     checksum
+  26      8     timestamp (ns since epoch)
+  34      4     flags (reserved)
+  ```
+end note
+
+note right of ProtobufSerializer
+  **Protocol Buffers:**
+  - Compact binary format
+  - Schema evolution support
+  - Code generation from .proto
+  - Typical overhead: 10-20%
+
+  **Performance:**
+  - Serialization: ~1 μs for 1KB
+  - Deserialization: ~2 μs for 1KB
+
+  **Example .proto:**
+  ```protobuf
+  message ServiceRequest {
+      string interface_name = 1;
+      string method_name = 2;
+      repeated bytes args = 3;
+  }
+  ```
+end note
+
+note right of FlatBuffersSerializer
+  **FlatBuffers:**
+  - Zero-copy deserialization
+  - Direct memory access
+  - Forward/backward compatible
+  - No parsing overhead
+
+  **Performance:**
+  - Serialization: ~0.5 μs for 1KB
+  - Deserialization: ~0 μs (direct access)
+
+  **Use Cases:**
+  - High-frequency calls
+  - Large messages
+  - Minimal latency
+end note
+
+@enduml
+
+@startuml Unix_Socket_Transport_Detail
+title Unix Domain Socket Transport - Detailed Implementation
+
+participant "Client Proxy" as PROXY
+participant "UnixSocketTransport" as TRANS
+participant "Connection Pool" as POOL
+participant "Unix Socket" as SOCK
+participant "Server Stub" as STUB
+participant "Service Impl" as IMPL
+
+== Connection Establishment ==
+
+PROXY -> TRANS: send(message)
+activate TRANS
+
+TRANS -> POOL: acquire()
+activate POOL
+
+alt Pool Has Available Connection
+    POOL -> POOL: conn = availableConnections_.pop()
+    POOL --> TRANS: connection
+else No Available Connection
+    alt Pool Below Max Size
+        POOL -> SOCK: socket(AF_UNIX, SOCK_STREAM, 0)
+        activate SOCK
+        SOCK --> POOL: fd
+
+        POOL -> SOCK: connect("/tmp/cdmf-ipc.sock")
+        SOCK --> POOL: connected
+
+        POOL -> POOL: conn = new Connection(fd)
+        POOL --> TRANS: connection
+    else Pool At Max Size
+        POOL -> POOL: wait for available connection (timeout 5s)
+        alt Timeout Expired
+            POOL --> TRANS: throw TimeoutException
+        else Connection Available
+            POOL -> POOL: conn = availableConnections_.pop()
+            POOL --> TRANS: connection
+        end
+    end
+end
+
+deactivate POOL
+
+== Message Transmission ==
+
+TRANS -> TRANS: wireData = message.serialize()
+
+note right of TRANS
+  **Serialized Data:**
+  ┌────────────────────────┐
+  │ Header (32 bytes)      │
+  │ - magic: 0x43444D46    │
+  │ - type: REQUEST        │
+  │ - id: 12345            │
+  │ - size: 256            │
+  │ - checksum: 0xABCD     │
+  ├────────────────────────┤
+  │ Payload (256 bytes)    │
+  │ - Protobuf encoded     │
+  └────────────────────────┘
+  Total: 288 bytes
+end note
+
+TRANS -> SOCK: write(fd, wireData, size)
+activate SOCK
+
+note right of SOCK
+  **Kernel Buffering:**
+  - SO_SNDBUF: 256 KB
+  - SO_RCVBUF: 256 KB
+  - write() copies to kernel buffer
+  - May block if buffer full
+end note
+
+SOCK -> SOCK: copy to kernel send buffer
+
+SOCK -> STUB: data arrives (epoll notification)
+activate STUB
+
+STUB -> SOCK: read(fd, buffer, sizeof(MessageHeader))
+SOCK --> STUB: header (32 bytes)
+
+STUB -> STUB: validate header (magic, checksum)
+
+alt Header Valid
+    STUB -> STUB: payloadSize = header.payloadSize
+    STUB -> SOCK: read(fd, buffer, payloadSize)
+    SOCK --> STUB: payload
+
+    STUB -> STUB: message = Message::deserialize(header, payload)
+
+    STUB -> STUB: verify checksum
+
+    alt Checksum Valid
+        STUB -> IMPL: dispatch(message)
+        activate IMPL
+
+        IMPL -> IMPL: execute method
+        IMPL --> STUB: result
+        deactivate IMPL
+
+        STUB -> STUB: response = createResponse(result)
+        STUB -> STUB: wireData = response.serialize()
+
+        STUB -> SOCK: write(fd, wireData, size)
+        SOCK -> TRANS: response data arrives
+    else Checksum Invalid
+        STUB -> STUB: error = createError("CHECKSUM_MISMATCH")
+        STUB -> SOCK: write(fd, error, size)
+    end
+else Header Invalid
+    STUB -> STUB: close connection
+end
+
+deactivate STUB
+
+== Response Reception ==
+
+TRANS -> SOCK: read(fd, buffer, sizeof(MessageHeader))
+SOCK --> TRANS: header
+
+TRANS -> SOCK: read(fd, buffer, header.payloadSize)
+SOCK --> TRANS: payload
+
+TRANS -> TRANS: response = Message::deserialize(header, payload)
+
+TRANS -> POOL: release(connection)
+activate POOL
+POOL -> POOL: availableConnections_.push(conn)
+deactivate POOL
+
+TRANS --> PROXY: response
+deactivate TRANS
+
+deactivate SOCK
+
+note over PROXY, IMPL
+  **Performance Breakdown (Total: 80 μs):**
+  - Serialization: 1 μs
+  - write() syscall: 5 μs
+  - Kernel copy: 10 μs
+  - Context switch: 10 μs
+  - Deserialization: 2 μs
+  - Method execution: 20 μs
+  - Response path: 32 μs
+
+  **Optimizations:**
+  - Connection pooling (avoid connect overhead)
+  - Kernel buffer tuning (SO_SNDBUF/RCVBUF)
+  - TCP_NODELAY (disable Nagle algorithm)
+  - Batching small requests
+end note
+
+@enduml
+
+@startuml Shared_Memory_Transport_Detail
+title Shared Memory Transport - Lock-Free Ring Buffer
+
+participant "Client" as CLIENT
+participant "SharedMemoryTransport" as SHM
+participant "Ring Buffer" as RING
+participant "Server" as SERVER
+
+== Initialization ==
+
+CLIENT -> SHM: initialize(shmName)
+activate SHM
+
+SHM -> SHM: fd = shm_open("/cdmf-shm", O_CREAT | O_RDWR, 0600)
+SHM -> SHM: ftruncate(fd, SHM_SIZE)
+
+note right of SHM
+  **Shared Memory Layout:**
+  ```
+  ┌─────────────────────────────────┐  0x0000
+  │ RingBufferHeader (64 bytes)     │
+  │ - writePos: atomic<uint64_t>    │  0x0000
+  │ - readPos: atomic<uint64_t>     │  0x0008
+  │ - capacity: uint64_t            │  0x0010
+  │ - msgCount: atomic<uint64_t>    │  0x0018
+  │ - padding: 32 bytes             │  0x0020
+  ├─────────────────────────────────┤  0x0040
+  │ Data Buffer (16 MB - 64)        │
+  │ - Circular buffer               │
+  │ - Lock-free access              │
+  └─────────────────────────────────┘  16 MB
+  ```
+end note
+
+SHM -> SHM: addr = mmap(NULL, SHM_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0)
+SHM -> SHM: ringBuffer_ = new RingBuffer(addr)
+
+SHM --> CLIENT: initialized
+deactivate SHM
+
+== Lock-Free Write ==
+
+CLIENT -> SHM: send(message)
+activate SHM
+
+SHM -> SHM: data = message.serialize()
+SHM -> SHM: msgSize = data.size() + sizeof(MessageLength)
+
+SHM -> RING: tryWrite(data, msgSize)
+activate RING
+
+note right of RING
+  **Message Envelope:**
+  ```
+  ┌──────────────────────┐
+  │ Length (4 bytes)     │
+  ├──────────────────────┤
+  │ Message Data         │
+  │ (variable)           │
+  └──────────────────────┘
+  ```
+end note
+
+RING -> RING: currentWrite = writePos_.load(memory_order_acquire)
+RING -> RING: currentRead = readPos_.load(memory_order_acquire)
+
+RING -> RING: availableSpace = capacity - (currentWrite - currentRead)
+
+alt Enough Space
+    RING -> RING: newWrite = currentWrite + msgSize
+
+    RING -> RING: if writePos_.compare_exchange_strong(\n    currentWrite, newWrite,\n    memory_order_release)
+
+    alt CAS Successful
+        note right of RING
+          **Atomic CAS Operation:**
+          - Compare writePos_ with currentWrite
+          - If equal, set to newWrite
+          - Returns true on success
+          - Lock-free, single atomic instruction
+        end note
+
+        RING -> RING: offset = currentWrite % capacity
+        RING -> RING: memcpy(buffer + offset, &msgSize, 4)
+        RING -> RING: memcpy(buffer + offset + 4, data, data.size())
+
+        alt Message Wraps Around
+            note right of RING
+              **Wrap-Around Handling:**
+              - Split message into two parts
+              - First part: to end of buffer
+              - Second part: from start of buffer
+              - Reader handles reconstruction
+            end note
+
+            RING -> RING: part1Size = capacity - offset
+            RING -> RING: part2Size = msgSize - part1Size
+            RING -> RING: memcpy(buffer + offset, data, part1Size)
+            RING -> RING: memcpy(buffer, data + part1Size, part2Size)
+        end
+
+        RING -> RING: msgCount_.fetch_add(1, memory_order_release)
+
+        RING --> SHM: SUCCESS
+    else CAS Failed
+        note right of RING
+          **Retry on CAS Failure:**
+          - Another thread wrote concurrently
+          - Retry entire operation
+          - Exponential backoff
+        end note
+
+        RING -> RING: backoff()
+        RING -> RING: goto retry
+    end
+else Insufficient Space
+    RING --> SHM: BUFFER_FULL
+end
+
+deactivate RING
+
+SHM --> CLIENT: result
+deactivate SHM
+
+== Lock-Free Read ==
+
+SERVER -> RING: tryRead()
+activate RING
+
+RING -> RING: currentRead = readPos_.load(memory_order_acquire)
+RING -> RING: currentWrite = writePos_.load(memory_order_acquire)
+
+alt Data Available
+    RING -> RING: offset = currentRead % capacity
+    RING -> RING: memcpy(&msgSize, buffer + offset, 4)
+
+    RING -> RING: data = malloc(msgSize - 4)
+    RING -> RING: memcpy(data, buffer + offset + 4, msgSize - 4)
+
+    RING -> RING: newRead = currentRead + msgSize
+
+    RING -> RING: if readPos_.compare_exchange_strong(\n    currentRead, newRead,\n    memory_order_release)
+
+    alt CAS Successful
+        RING -> RING: msgCount_.fetch_sub(1, memory_order_release)
+        RING --> SERVER: message data
+    else CAS Failed
+        RING -> RING: free(data)
+        RING -> RING: goto retry
+    end
+else No Data
+    RING --> SERVER: EMPTY
+end
+
+deactivate RING
+
+note over CLIENT, SERVER
+  **Performance Characteristics:**
+
+  **Lock-Free Properties:**
+  - Wait-free for single producer/consumer
+  - Lock-free for multiple producers/consumers
+  - No kernel involvement (pure userspace)
+  - Cache-line aligned atomics
+
+  **Memory Barriers:**
+  - memory_order_acquire: prevent reordering of reads
+  - memory_order_release: prevent reordering of writes
+  - Ensures visibility across cores
+
+  **Latency Breakdown (Total: 15 μs):**
+  - CAS operation: 0.1 μs
+  - Memory copy: 5 μs (for 1 KB message)
+  - Cache coherency: 2 μs
+  - Deserialization: 8 μs
+
+  **Throughput:**
+  - Single thread: 10 GB/s (memory bandwidth bound)
+  - Multi-thread: scales with cores (lock-free)
+end note
+
+@enduml
+
+@startuml gRPC_Transport_Detail
+title gRPC Transport - Remote Service Call
+
+participant "Client Proxy" as PROXY
+participant "GrpcTransport" as GRPC
+participant "gRPC Channel" as CHAN
+participant "TLS Layer" as TLS
+participant "HTTP/2" as HTTP2
+participant "Network" as NET
+participant "gRPC Server" as SERVER
+participant "Service Impl" as IMPL
+
+== Channel Initialization ==
+
+PROXY -> GRPC: initialize(host, port)
+activate GRPC
+
+GRPC -> GRPC: channelArgs = {\n  GRPC_ARG_KEEPALIVE_TIME_MS: 10000,\n  GRPC_ARG_KEEPALIVE_TIMEOUT_MS: 5000,\n  GRPC_ARG_HTTP2_MAX_PINGS: 3\n}
+
+GRPC -> GRPC: credentials = grpc::SslCredentials({\n  root_certs: "/etc/cdmf/ca.pem",\n  private_key: "/etc/cdmf/client-key.pem",\n  cert_chain: "/etc/cdmf/client-cert.pem"\n})
+
+GRPC -> CHAN: CreateCustomChannel(host + ":" + port, credentials, channelArgs)
+activate CHAN
+
+CHAN -> TLS: initialize TLS 1.3 context
+activate TLS
+TLS --> CHAN: TLS context ready
+deactivate TLS
+
+CHAN --> GRPC: channel
+deactivate CHAN
+
+GRPC -> GRPC: stub_ = ServiceStub::NewStub(channel)
+
+GRPC --> PROXY: initialized
+deactivate GRPC
+
+== Service Call with mTLS ==
+
+PROXY -> GRPC: call(method, args)
+activate GRPC
+
+GRPC -> GRPC: request = ServiceRequest{\n  interface: "com.example.ILogger",\n  method: "log",\n  args: serialize(args)\n}
+
+GRPC -> GRPC: context = ClientContext()
+GRPC -> GRPC: context.set_deadline(now() + 5s)
+GRPC -> GRPC: context.AddMetadata("client-id", moduleId)
+
+GRPC -> CHAN: stub_->RemoteCall(&context, request, &response)
+activate CHAN
+
+CHAN -> TLS: TLS handshake (if new connection)
+activate TLS
+
+note right of TLS
+  **TLS 1.3 Handshake:**
+  1. ClientHello (supported ciphers, extensions)
+  2. ServerHello (selected cipher: TLS_AES_256_GCM_SHA384)
+  3. Certificate (server cert + chain)
+  4. CertificateRequest (request client cert)
+  5. Certificate (client cert)
+  6. Finished
+
+  **Duration:** 1-2 RTTs (~2-4 ms)
+  **Cipher:** AES-256-GCM (AEAD)
+  **Key Exchange:** ECDHE (P-256)
+end note
+
+TLS --> CHAN: secure channel established
+deactivate TLS
+
+CHAN -> HTTP2: create HTTP/2 stream
+activate HTTP2
+
+note right of HTTP2
+  **HTTP/2 Frame:**
+  ```
+  HEADERS frame:
+  - :method = POST
+  - :scheme = https
+  - :path = /cdmf.Service/RemoteCall
+  - :authority = server.example.com
+  - content-type = application/grpc+proto
+  - grpc-timeout = 5S
+  - client-id = module-123
+
+  DATA frame:
+  - flags = END_STREAM
+  - payload = Protocol Buffer encoded request
+  ```
+end note
+
+HTTP2 -> HTTP2: serialize to binary HTTP/2 frames
+HTTP2 -> TLS: encrypt frames
+activate TLS
+TLS -> TLS: AES-256-GCM encrypt
+TLS --> HTTP2: ciphertext
+deactivate TLS
+
+HTTP2 -> NET: send TCP packets
+activate NET
+
+note right of NET
+  **Network Transmission:**
+  - TCP connection (established, or reused)
+  - IP packet fragmentation if needed
+  - Network latency: 0.1-5 ms (LAN/WAN)
+end note
+
+NET -> SERVER: packets arrive
+activate SERVER
+
+SERVER -> SERVER: TLS decrypt
+SERVER -> SERVER: HTTP/2 parse
+
+SERVER -> IMPL: ServiceImpl::RemoteCall(request)
+activate IMPL
+
+IMPL -> IMPL: method = resolveMethod(request.interface, request.method)
+IMPL -> IMPL: args = deserialize(request.args)
+IMPL -> IMPL: result = method->invoke(args)
+
+IMPL --> SERVER: result
+deactivate IMPL
+
+SERVER -> SERVER: response = ServiceResponse{\n  status: OK,\n  result: serialize(result)\n}
+
+SERVER -> SERVER: HTTP/2 encode response
+
+note right of SERVER
+  **HTTP/2 Response:**
+  ```
+  HEADERS frame:
+  - :status = 200
+  - content-type = application/grpc+proto
+  - grpc-status = 0 (OK)
+
+  DATA frame:
+  - payload = Protocol Buffer encoded response
+  ```
+end note
+
+SERVER -> NET: send response packets
+NET -> HTTP2: packets arrive
+deactivate NET
+
+HTTP2 -> HTTP2: parse HTTP/2 frames
+HTTP2 -> TLS: decrypt
+activate TLS
+TLS --> HTTP2: plaintext
+deactivate TLS
+
+HTTP2 --> CHAN: response data
+deactivate HTTP2
+
+CHAN --> GRPC: response
+deactivate CHAN
+
+deactivate SERVER
+
+GRPC -> GRPC: result = deserialize(response.result)
+
+GRPC --> PROXY: result
+deactivate GRPC
+
+note over PROXY, IMPL
+  **Latency Breakdown (Total: 3-8 ms):**
+  - Serialization: 0.01 ms
+  - TLS encrypt: 0.05 ms
+  - Network (LAN): 0.5 ms
+  - Server processing: 1 ms
+  - Network (return): 0.5 ms
+  - TLS decrypt: 0.05 ms
+  - Deserialization: 0.02 ms
+  - Overhead: 0.87 ms
+
+  **Security Features:**
+  - mTLS authentication (mutual certificate verification)
+  - AES-256-GCM encryption
+  - Perfect forward secrecy (ECDHE)
+  - Certificate pinning (optional)
+
+  **Reliability Features:**
+  - Automatic retries (exponential backoff)
+  - Deadlines / timeouts
+  - Health checking
+  - Load balancing (client-side or proxy)
+end note
+
+@enduml
+
+@startuml Proxy_Stub_Generation
+title Proxy/Stub Pattern - Code Generation
+
+participant "IDL Compiler" as IDL
+participant "Interface Definition" as DEF
+participant "Proxy Generator" as PGEN
+participant "Stub Generator" as SGEN
+
+== IDL Processing ==
+
+IDL -> DEF: parse("ILogger.idl")
+activate DEF
+
+note right of DEF
+  **Interface Definition (IDL):**
+  ```cpp
+  interface ILogger {
+      void log(string level, string message);
+      void setLevel(string level);
+      string getLevel();
+      void flush();
+  };
+  ```
+end note
+
+DEF --> IDL: AST (abstract syntax tree)
+deactivate DEF
+
+IDL -> IDL: analyze AST
+activate IDL
+
+note right of IDL
+  **AST Structure:**
+  ```
+  Interface: ILogger
+    Methods:
+      - log(level: string, message: string) → void
+      - setLevel(level: string) → void
+      - getLevel() → string
+      - flush() → void
+  ```
+end note
+
+deactivate IDL
+
+== Proxy Generation ==
+
+IDL -> PGEN: generateProxy(interface)
+activate PGEN
+
+PGEN -> PGEN: createProxyClass()
+
+note right of PGEN
+  **Generated Proxy (Client-side):**
+  ```cpp
+  class ILoggerProxy : public ILogger {
+  private:
+      ITransport* transport_;
+      string interfaceName_;
+
+  public:
+      ILoggerProxy(ITransport* transport)
+          : transport_(transport),
+            interfaceName_("com.example.ILogger") {}
+
+      void log(const string& level, const string& message) override {
+          Message request;
+          request.setType(MessageType::REQUEST);
+          request.setInterface(interfaceName_);
+          request.setMethod("log");
+
+          // Serialize arguments
+          vector<uint8_t> args;
+          serialize(args, level);
+          serialize(args, message);
+          request.setPayload(args);
+
+          // Send and wait for response
+          Message response = transport_->sendSync(request);
+
+          if (response.getType() == MessageType::ERROR) {
+              throw RemoteException(response.getErrorMessage());
+          }
+
+          // void return, no deserialization needed
+      }
+
+      void setLevel(const string& level) override {
+          // Similar pattern...
+      }
+
+      string getLevel() override {
+          Message request;
+          request.setType(MessageType::REQUEST);
+          request.setInterface(interfaceName_);
+          request.setMethod("getLevel");
+          request.setPayload({});
+
+          Message response = transport_->sendSync(request);
+
+          if (response.getType() == MessageType::ERROR) {
+              throw RemoteException(response.getErrorMessage());
+          }
+
+          // Deserialize return value
+          string result;
+          deserialize(response.getPayload(), result);
+          return result;
+      }
+
+      void flush() override {
+          // Similar pattern...
+      }
+  };
+  ```
+end note
+
+PGEN --> IDL: ILoggerProxy.h, ILoggerProxy.cpp
+deactivate PGEN
+
+== Stub Generation ==
+
+IDL -> SGEN: generateStub(interface)
+activate SGEN
+
+SGEN -> SGEN: createStubClass()
+
+note right of SGEN
+  **Generated Stub (Server-side):**
+  ```cpp
+  class ILoggerStub {
+  private:
+      ILogger* impl_;
+
+  public:
+      ILoggerStub(ILogger* impl) : impl_(impl) {}
+
+      Message dispatch(const Message& request) {
+          string method = request.getMethod();
+
+          if (method == "log") {
+              // Deserialize arguments
+              auto payload = request.getPayload();
+              string level, message;
+              size_t offset = 0;
+              offset += deserialize(payload, offset, level);
+              offset += deserialize(payload, offset, message);
+
+              // Invoke implementation
+              impl_->log(level, message);
+
+              // Create response
+              Message response;
+              response.setType(MessageType::RESPONSE);
+              response.setMessageId(request.getMessageId());
+              // void return, no payload
+              return response;
+
+          } else if (method == "setLevel") {
+              auto payload = request.getPayload();
+              string level;
+              deserialize(payload, 0, level);
+
+              impl_->setLevel(level);
+
+              Message response;
+              response.setType(MessageType::RESPONSE);
+              response.setMessageId(request.getMessageId());
+              return response;
+
+          } else if (method == "getLevel") {
+              // Invoke implementation
+              string result = impl_->getLevel();
+
+              // Serialize return value
+              vector<uint8_t> payload;
+              serialize(payload, result);
+
+              Message response;
+              response.setType(MessageType::RESPONSE);
+              response.setMessageId(request.getMessageId());
+              response.setPayload(payload);
+              return response;
+
+          } else if (method == "flush") {
+              impl_->flush();
+
+              Message response;
+              response.setType(MessageType::RESPONSE);
+              response.setMessageId(request.getMessageId());
+              return response;
+
+          } else {
+              Message error;
+              error.setType(MessageType::ERROR);
+              error.setErrorMessage("Unknown method: " + method);
+              return error;
+          }
+      }
+  };
+  ```
+end note
+
+SGEN --> IDL: ILoggerStub.h, ILoggerStub.cpp
+deactivate SGEN
+
+note over IDL, SGEN
+  **Code Generation Benefits:**
+  - Type-safe marshaling/unmarshaling
+  - Automatic serialization
+  - Error handling boilerplate
+  - Transparent remote calls
+
+  **Generated Code Size:**
+  - Proxy: ~200 lines per interface
+  - Stub: ~300 lines per interface
+  - Scales linearly with method count
+end note
+
+@enduml
+
+@startuml Connection_Management
+title Connection Management - Pooling and Reliability
+
+class ConnectionPool {
+    - available_: queue<Connection*>
+    - active_: set<Connection*>
+    - maxSize_: size_t
+    - minSize_: size_t
+    - mutex_: mutex
+    - cv_: condition_variable
+    __
+    + acquire(timeout: duration) : Connection*
+    + release(conn: Connection*)
+    + getStats() : PoolStats
+    - createConnection() : Connection*
+    - validateConnection(conn: Connection*) : bool
+    - evictIdleConnections()
+}
+
+class Connection {
+    - fd_: int
+    - state_: ConnectionState
+    - lastUsed_: timestamp
+    - createdAt_: timestamp
+    - bytesReceived_: atomic<uint64_t>
+    - bytesSent_: atomic<uint64_t>
+    __
+    + send(data: vector<uint8_t>) : bool
+    + receive(timeout: duration) : vector<uint8_t>
+    + isAlive() : bool
+    + close()
+}
+
+enum ConnectionState {
+    CONNECTING
+    CONNECTED
+    IDLE
+    ACTIVE
+    ERROR
+    CLOSED
+}
+
+class CircuitBreaker {
+    - state_: CircuitState
+    - failureCount_: atomic<int>
+    - lastFailureTime_: timestamp
+    - failureThreshold_: int
+    - resetTimeout_: duration
+    __
+    + execute(operation: function) : Result
+    + recordSuccess()
+    + recordFailure()
+    - shouldAttempt() : bool
+    - transitionToOpen()
+    - transitionToHalfOpen()
+    - transitionToClosed()
+}
+
+enum CircuitState {
+    CLOSED
+    OPEN
+    HALF_OPEN
+}
+
+class RetryPolicy {
+    - maxRetries_: int
+    - baseDelay_: duration
+    - maxDelay_: duration
+    - backoffMultiplier_: double
+    __
+    + execute(operation: function) : Result
+    - calculateDelay(attempt: int) : duration
+    - shouldRetry(error: Error) : bool
+}
+
+ConnectionPool o-- Connection
+Connection *-- ConnectionState
+CircuitBreaker *-- CircuitState
+CircuitBreaker --> RetryPolicy
+
+note top of ConnectionPool
+  **Pool Configuration:**
+  - minSize: 2 (pre-warmed connections)
+  - maxSize: 100 (hard limit)
+  - idleTimeout: 60 seconds
+  - validationQuery: heartbeat message
+
+  **Eviction Strategy:**
+  - Run every 30 seconds
+  - Close connections idle > 60s
+  - Maintain minSize connections
+
+  **Performance:**
+  - Acquire from pool: ~1 μs
+  - Create new connection: ~100 μs
+  - Connection reuse ratio: > 99%
+end note
+
+note right of CircuitBreaker
+  **Circuit Breaker Pattern:**
+
+  **CLOSED** (normal operation):
+  - All requests pass through
+  - Failures increment counter
+  - If failures >= threshold (5):
+    → transition to OPEN
+
+  **OPEN** (fail fast):
+  - All requests fail immediately
+  - No remote calls made
+  - After resetTimeout (60s):
+    → transition to HALF_OPEN
+
+  **HALF_OPEN** (testing):
+  - Single test request allowed
+  - If success:
+    → transition to CLOSED
+  - If failure:
+    → transition to OPEN
+
+  **Use Cases:**
+  - Prevent cascade failures
+  - Fail fast when service down
+  - Automatic recovery detection
+end note
+
+note right of RetryPolicy
+  **Exponential Backoff:**
+  ```cpp
+  duration calculateDelay(int attempt) {
+      duration delay = baseDelay *
+          pow(backoffMultiplier, attempt - 1);
+      return min(delay, maxDelay);
+  }
+  ```
+
+  **Example (baseDelay=100ms, multiplier=2):**
+  - Attempt 1: 100 ms
+  - Attempt 2: 200 ms
+  - Attempt 3: 400 ms
+  - Attempt 4: 800 ms
+  - Attempt 5: 1600 ms (capped at maxDelay)
+
+  **Retryable Errors:**
+  - Timeout
+  - Connection reset
+  - Service unavailable
+
+  **Non-retryable Errors:**
+  - Invalid argument
+  - Permission denied
+  - Not found
+end note
+
+@enduml
+
+@enduml

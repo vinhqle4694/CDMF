@@ -1,0 +1,83 @@
+/**
+ * @file message.proto
+ * @brief Protocol Buffers schema for IPC messages
+ *
+ * Defines the protobuf schema for serializing CDMF IPC messages.
+ * Compatible with protobuf version 3 (proto3 syntax).
+ *
+ * @version 1.0.0
+ * @date 2025-10-03
+ */
+
+syntax = "proto3";
+
+package cdmf.ipc.proto;
+
+// Message type enumeration
+enum MessageType {
+  MESSAGE_TYPE_UNKNOWN = 0;
+  MESSAGE_TYPE_REQUEST = 1;
+  MESSAGE_TYPE_RESPONSE = 2;
+  MESSAGE_TYPE_EVENT = 3;
+  MESSAGE_TYPE_ERROR = 4;
+  MESSAGE_TYPE_HEARTBEAT = 5;
+  MESSAGE_TYPE_CONTROL = 6;
+}
+
+// Message priority levels
+enum MessagePriority {
+  MESSAGE_PRIORITY_LOW = 0;
+  MESSAGE_PRIORITY_NORMAL = 1;
+  MESSAGE_PRIORITY_HIGH = 2;
+  MESSAGE_PRIORITY_CRITICAL = 3;
+}
+
+// Serialization format enumeration
+enum SerializationFormat {
+  SERIALIZATION_FORMAT_BINARY = 0;
+  SERIALIZATION_FORMAT_JSON = 1;
+  SERIALIZATION_FORMAT_PROTOBUF = 2;
+  SERIALIZATION_FORMAT_MESSAGEPACK = 3;
+  SERIALIZATION_FORMAT_CUSTOM = 4;
+}
+
+// Message header
+message MessageHeader {
+  bytes message_id = 1;           // 16-byte UUID
+  bytes correlation_id = 2;       // 16-byte UUID
+  uint64 timestamp = 3;           // Microseconds since Unix epoch
+  MessageType type = 4;
+  MessagePriority priority = 5;
+  SerializationFormat format = 6;
+  uint32 version = 7;
+  uint32 flags = 8;
+  uint32 payload_size = 9;
+  uint32 checksum = 10;
+}
+
+// Message metadata
+message MessageMetadata {
+  string source_endpoint = 1;
+  string destination_endpoint = 2;
+  string subject = 3;
+  string content_type = 4;
+  uint64 expiration = 5;          // Microseconds since Unix epoch
+  uint32 retry_count = 6;
+  uint32 max_retries = 7;
+}
+
+// Error information
+message ErrorInfo {
+  uint32 error_code = 1;
+  string error_message = 2;
+  string error_category = 3;
+  string error_context = 4;
+}
+
+// Complete message
+message Message {
+  MessageHeader header = 1;
+  MessageMetadata metadata = 2;
+  bytes payload = 3;
+  ErrorInfo error_info = 4;       // Only populated for ERROR messages
+}

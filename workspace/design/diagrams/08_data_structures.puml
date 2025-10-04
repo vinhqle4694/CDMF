@@ -1,0 +1,1036 @@
+@startuml CDMF_Data_Structures
+
+title CDMF Core Data Structures - Internal Implementation
+
+@startuml Lock_Free_Ring_Buffer
+title Lock-Free Ring Buffer - Shared Memory IPC
+
+class RingBuffer {
+    - buffer_: uint8_t*
+    - capacity_: uint64_t
+    - writePos_: atomic<uint64_t>
+    - readPos_: atomic<uint64_t>
+    - msgCount_: atomic<uint64_t>
+    __
+    + RingBuffer(capacity: uint64_t)
+    + tryWrite(data: void*, size: size_t) : bool
+    + tryRead(data: void*, maxSize: size_t) : size_t
+    + availableSpace() : uint64_t
+    + messageCount() : uint64_t
+    + clear()
+}
+
+note top of RingBuffer
+  **Memory Layout:**
+  ```
+  ┌────────────────────────────────────────────────────┐
+  │ Header (64 bytes, cache-line aligned)              │
+  │ ┌────────────────────────────────────────────────┐ │
+  │ │ writePos: atomic<uint64_t>  (offset 0)         │ │
+  │ │ readPos:  atomic<uint64_t>  (offset 8)         │ │
+  │ │ capacity: uint64_t          (offset 16)        │ │
+  │ │ msgCount: atomic<uint64_t>  (offset 24)        │ │
+  │ │ padding:  [32 bytes]        (offset 32)        │ │
+  │ └────────────────────────────────────────────────┘ │
+  ├────────────────────────────────────────────────────┤
+  │ Data Buffer (capacity bytes)                       │
+  │ ┌──────────┬──────────┬──────────┬─────────────┐   │
+  │ │ Msg 1    │ Msg 2    │ Msg 3    │   ...       │   │
+  │ │ [Len][D] │ [Len][D] │ [Len][D] │             │   │
+  │ └──────────┴──────────┴──────────┴─────────────┘   │
+  └────────────────────────────────────────────────────┘
+  ```
+
+  **Message Format:**
+  ```
+  ┌─────────────────┬──────────────────────────────┐
+  │ Length (4 bytes)│ Data (variable)              │
+  └─────────────────┴──────────────────────────────┘
+  ```
+
+  **Atomic Operations (x86-64):**
+  - load(memory_order_acquire): MOVQ + LFENCE
+  - store(memory_order_release): SFENCE + MOVQ
+  - compare_exchange_strong: LOCK CMPXCHG
+  - fetch_add: LOCK XADD
+
+  **Cache Line Alignment:**
+  - writePos_: aligned to 64-byte boundary
+  - readPos_: separate cache line (avoid false sharing)
+  - Producer writes to writePos_ cache line
+  - Consumer writes to readPos_ cache line
+  - No cache line ping-pong between cores
+end note
+
+note right of RingBuffer
+  **Write Algorithm (Lock-Free):**
+  ```cpp
+  bool tryWrite(void* data, size_t size) {
+      uint64_t msgSize = size + sizeof(uint32_t);
+
+      while (true) {
+          uint64_t currentWrite = writePos_.load(memory_order_acquire);
+          uint64_t currentRead = readPos_.load(memory_order_acquire);
+
+          // Check available space
+          uint64_t available = capacity_ - (currentWrite - currentRead);
+          if (available < msgSize) {
+              return false; // Buffer full
+          }
+
+          uint64_t newWrite = currentWrite + msgSize;
+
+          // Try to claim space atomically
+          if (writePos_.compare_exchange_strong(
+                  currentWrite, newWrite,
+                  memory_order_release, memory_order_acquire)) {
+
+              // Space claimed, write data
+              uint64_t offset = currentWrite % capacity_;
+              uint32_t length = static_cast<uint32_t>(size);
+
+              // Write length prefix
+              memcpy(buffer_ + offset, &length, sizeof(uint32_t));
+
+              // Write message data (may wrap around)
+              if (offset + msgSize <= capacity_) {
+                  // No wrap
+                  memcpy(buffer_ + offset + 4, data, size);
+              } else {
+                  // Wrap around
+                  size_t firstPart = capacity_ - offset - 4;
+                  memcpy(buffer_ + offset + 4, data, firstPart);
+                  memcpy(buffer_, (uint8_t*)data + firstPart,
+                         size - firstPart);
+              }
+
+              msgCount_.fetch_add(1, memory_order_release);
+              return true;
+          }
+
+          // CAS failed, retry
+          // (another thread wrote concurrently)
+      }
+  }
+  ```
+
+  **Read Algorithm (Lock-Free):**
+  ```cpp
+  size_t tryRead(void* data, size_t maxSize) {
+      while (true) {
+          uint64_t currentRead = readPos_.load(memory_order_acquire);
+          uint64_t currentWrite = writePos_.load(memory_order_acquire);
+
+          if (currentRead == currentWrite) {
+              return 0; // Buffer empty
+          }
+
+          uint64_t offset = currentRead % capacity_;
+
+          // Read length prefix
+          uint32_t length;
+          memcpy(&length, buffer_ + offset, sizeof(uint32_t));
+
+          if (length > maxSize) {
+              return 0; // Message too large
+          }
+
+          uint64_t msgSize = length + sizeof(uint32_t);
+          uint64_t newRead = currentRead + msgSize;
+
+          // Read message data
+          if (offset + msgSize <= capacity_) {
+              memcpy(data, buffer_ + offset + 4, length);
+          } else {
+              size_t firstPart = capacity_ - offset - 4;
+              memcpy(data, buffer_ + offset + 4, firstPart);
+              memcpy((uint8_t*)data + firstPart, buffer_,
+                     length - firstPart);
+          }
+
+          // Try to advance read position
+          if (readPos_.compare_exchange_strong(
+                  currentRead, newRead,
+                  memory_order_release, memory_order_acquire)) {
+
+              msgCount_.fetch_sub(1, memory_order_release);
+              return length;
+          }
+
+          // CAS failed, retry
+      }
+  }
+  ```
+
+  **Performance:**
+  - Single producer/consumer: 10M messages/sec
+  - Multi producer/consumer: 5M messages/sec
+  - Latency: 10-20 μs (CAS + memcpy)
+  - Zero syscalls (pure userspace)
+end note
+
+@enduml
+
+@startuml Service_Registry_Hash_Map
+title Service Registry - Hash Map Data Structure
+
+class ServiceHashMap {
+    - buckets_: vector<Bucket>
+    - size_: atomic<size_t>
+    - loadFactor_: double
+    - mutex_: shared_mutex
+    __
+    + insert(key: string, entry: ServiceEntry)
+    + find(key: string) : vector<ServiceEntry>*
+    + erase(key: string, serviceId: uint64_t)
+    + rehash()
+    - hash(key: string) : size_t
+    - getBucket(hash: size_t) : Bucket&
+}
+
+class Bucket {
+    - entries_: vector<pair<string, vector<ServiceEntry>>>
+    - mutex_: mutex
+    __
+    + insert(key: string, entry: ServiceEntry)
+    + find(key: string) : vector<ServiceEntry>*
+    + erase(key: string, serviceId: uint64_t)
+}
+
+class ServiceEntry {
+    + serviceId: uint64_t
+    + interfaceName: string
+    + service: void*
+    + module: Module*
+    + properties: Properties
+    + ranking: int
+    + registrationTime: timestamp
+}
+
+ServiceHashMap o-- Bucket
+Bucket o-- ServiceEntry
+
+note top of ServiceHashMap
+  **Hash Map Structure:**
+  ```
+  buckets_ (default: 1024 buckets)
+  ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+  │  0  │  1  │  2  │  3  │ ... │ 511 │ ... │1023 │
+  └──┬──┴──┬──┴──┬──┴──┬──┴─────┴──┬──┴─────┴──┬──┘
+     │     │     │     │           │           │
+     ▼     ▼     ▼     ▼           ▼           ▼
+   Bucket Bucket ...               Bucket     Bucket
+  ```
+
+  **Bucket Structure (chaining):**
+  ```
+  Bucket #42:
+  ┌─────────────────────────────────────────────────┐
+  │ entries_: vector<pair<string, vector<Entry>>>   │
+  │ ┌───────────────────────────────────────────┐   │
+  │ │ ["com.example.ILogger", [Entry1, Entry2]] │   │
+  │ ├───────────────────────────────────────────┤   │
+  │ │ ["com.example.IDatabase", [Entry3]]       │   │
+  │ └───────────────────────────────────────────┘   │
+  └─────────────────────────────────────────────────┘
+  ```
+
+  **Hash Function (FNV-1a):**
+  ```cpp
+  size_t hash(const string& key) {
+      size_t hash = 14695981039346656037ULL; // FNV offset basis
+      for (char c : key) {
+          hash ^= static_cast<size_t>(c);
+          hash *= 1099511628211ULL; // FNV prime
+      }
+      return hash;
+  }
+  ```
+
+  **Bucket Selection:**
+  ```cpp
+  Bucket& getBucket(size_t hash) {
+      return buckets_[hash % buckets_.size()];
+  }
+  ```
+
+  **Load Factor & Rehashing:**
+  - Load factor threshold: 0.75
+  - When size / buckets > 0.75, rehash to 2x buckets
+  - Rehash operation: O(n), infrequent
+end note
+
+note right of Bucket
+  **Thread Safety:**
+  - ServiceHashMap: shared_mutex (readers/writers)
+  - Individual Bucket: mutex (per-bucket locking)
+
+  **Read Operation (shared lock):**
+  ```cpp
+  vector<ServiceEntry>* find(const string& key) {
+      shared_lock<shared_mutex> mapLock(mutex_);
+      size_t hash = hash(key);
+      Bucket& bucket = getBucket(hash);
+
+      lock_guard<mutex> bucketLock(bucket.mutex_);
+      for (auto& entry : bucket.entries_) {
+          if (entry.first == key) {
+              return &entry.second;
+          }
+      }
+      return nullptr;
+  }
+  ```
+
+  **Write Operation (exclusive lock):**
+  ```cpp
+  void insert(const string& key, ServiceEntry entry) {
+      unique_lock<shared_mutex> mapLock(mutex_);
+      size_t hash = hash(key);
+      Bucket& bucket = getBucket(hash);
+
+      lock_guard<mutex> bucketLock(bucket.mutex_);
+      for (auto& e : bucket.entries_) {
+          if (e.first == key) {
+              e.second.push_back(entry);
+              // Sort by ranking descending
+              std::sort(e.second.begin(), e.second.end(),
+                  [](const ServiceEntry& a, const ServiceEntry& b) {
+                      return a.ranking > b.ranking;
+                  });
+              size_++;
+              return;
+          }
+      }
+      bucket.entries_.push_back({key, {entry}});
+      size_++;
+  }
+  ```
+
+  **Performance:**
+  - Average lookup: O(1)
+  - Worst case (all hash to same bucket): O(n)
+  - Typical bucket occupancy: 0-2 entries
+  - Concurrent reads: unlimited (shared_mutex)
+  - Concurrent writes: serialized per bucket
+end note
+
+@enduml
+
+@startuml Dependency_Graph
+title Dependency Graph - Topological Sort Data Structure
+
+class DependencyGraph {
+    - nodes_: map<Module*, GraphNode>
+    - topologicalOrder_: vector<Module*>
+    - hasCycle_: bool
+    __
+    + addNode(module: Module*)
+    + addEdge(from: Module*, to: Module*)
+    + topologicalSort() : vector<Module*>
+    + hasCycle() : bool
+    - dfsVisit(node: GraphNode*, visited, stack)
+    - detectCycle() : bool
+}
+
+class GraphNode {
+    + module: Module*
+    + dependencies: vector<Module*>
+    + dependents: vector<Module*>
+    + inDegree: int
+    + outDegree: int
+    + state: VisitState
+}
+
+enum VisitState {
+    UNVISITED
+    VISITING
+    VISITED
+}
+
+DependencyGraph o-- GraphNode
+GraphNode *-- VisitState
+
+note top of DependencyGraph
+  **Graph Representation:**
+  ```
+  Example Dependency Graph:
+
+  A (no dependencies)
+  ├─→ B (depends on A)
+  │   └─→ C (depends on B)
+  └─→ D (depends on A)
+
+  Adjacency List:
+  nodes_[A] → dependencies: []
+              dependents: [B, D]
+              inDegree: 0
+              outDegree: 2
+
+  nodes_[B] → dependencies: [A]
+              dependents: [C]
+              inDegree: 1
+              outDegree: 1
+
+  nodes_[C] → dependencies: [B]
+              dependents: []
+              inDegree: 1
+              outDegree: 0
+
+  nodes_[D] → dependencies: [A]
+              dependents: []
+              inDegree: 1
+              outDegree: 0
+  ```
+end note
+
+note right of DependencyGraph
+  **Topological Sort (Kahn's Algorithm):**
+  ```cpp
+  vector<Module*> topologicalSort() {
+      vector<Module*> result;
+      queue<Module*> zeroInDegree;
+      map<Module*, int> inDegreeMap;
+
+      // Initialize in-degree map
+      for (auto& [module, node] : nodes_) {
+          inDegreeMap[module] = node.inDegree;
+          if (node.inDegree == 0) {
+              zeroInDegree.push(module);
+          }
+      }
+
+      // Process nodes in topological order
+      while (!zeroInDegree.empty()) {
+          Module* current = zeroInDegree.front();
+          zeroInDegree.pop();
+          result.push_back(current);
+
+          // Reduce in-degree of dependents
+          for (Module* dependent : nodes_[current].dependents) {
+              inDegreeMap[dependent]--;
+              if (inDegreeMap[dependent] == 0) {
+                  zeroInDegree.push(dependent);
+              }
+          }
+      }
+
+      // Check for cycle
+      if (result.size() != nodes_.size()) {
+          hasCycle_ = true;
+          return {}; // Cycle detected
+      }
+
+      topologicalOrder_ = result;
+      return result;
+  }
+  ```
+
+  **Example Execution:**
+  ```
+  Initial:
+  - inDegree: A=0, B=1, C=1, D=1
+  - zeroInDegree: [A]
+
+  Iteration 1:
+  - Pop A, result=[A]
+  - Reduce: B=0, D=0
+  - zeroInDegree: [B, D]
+
+  Iteration 2:
+  - Pop B, result=[A, B]
+  - Reduce: C=0
+  - zeroInDegree: [D, C]
+
+  Iteration 3:
+  - Pop D, result=[A, B, D]
+  - zeroInDegree: [C]
+
+  Iteration 4:
+  - Pop C, result=[A, B, D, C]
+  - zeroInDegree: []
+
+  Final: [A, B, D, C] (valid topological order)
+  ```
+
+  **Cycle Detection (DFS):**
+  ```cpp
+  bool detectCycle() {
+      set<Module*> visited, recStack;
+
+      for (auto& [module, node] : nodes_) {
+          if (visited.find(module) == visited.end()) {
+              if (dfsVisit(module, visited, recStack)) {
+                  return true; // Cycle found
+              }
+          }
+      }
+      return false;
+  }
+
+  bool dfsVisit(Module* m, set<Module*>& visited,
+                set<Module*>& recStack) {
+      visited.insert(m);
+      recStack.insert(m);
+
+      for (Module* dep : nodes_[m].dependencies) {
+          if (recStack.find(dep) != recStack.end()) {
+              return true; // Back edge = cycle
+          }
+          if (visited.find(dep) == visited.end()) {
+              if (dfsVisit(dep, visited, recStack)) {
+                  return true;
+              }
+          }
+      }
+
+      recStack.erase(m);
+      return false;
+  }
+  ```
+
+  **Complexity:**
+  - Kahn's algorithm: O(V + E)
+  - Cycle detection (DFS): O(V + E)
+  - Space: O(V) for visited/stack
+end note
+
+@enduml
+
+@startuml Event_Queue
+title Event Queue - Priority-Based Dispatcher
+
+class EventQueue {
+    - queues_: array<deque<Event>, NUM_PRIORITIES>
+    - mutex_: mutex
+    - cv_: condition_variable
+    - running_: atomic<bool>
+    __
+    + enqueue(event: Event, priority: Priority)
+    + dequeue(timeout: duration) : Event
+    + size() : size_t
+    + clear()
+}
+
+enum Priority {
+    CRITICAL = 0
+    HIGH = 1
+    NORMAL = 2
+    LOW = 3
+}
+
+class Event {
+    + type: EventType
+    + topic: string
+    + properties: Properties
+    + timestamp: timestamp
+    + priority: Priority
+}
+
+EventQueue o-- Event
+Event *-- Priority
+
+note top of EventQueue
+  **Multi-Priority Queue Structure:**
+  ```
+  queues_:
+  ┌─────────────────────────────────────────────┐
+  │ [0] CRITICAL:  deque<Event>                 │
+  │     ┌───┬───┬───┐                           │
+  │     │ E │ E │ E │  (processed first)        │
+  │     └───┴───┴───┘                           │
+  ├─────────────────────────────────────────────┤
+  │ [1] HIGH:      deque<Event>                 │
+  │     ┌───┬───┐                               │
+  │     │ E │ E │                               │
+  │     └───┴───┘                               │
+  ├─────────────────────────────────────────────┤
+  │ [2] NORMAL:    deque<Event>                 │
+  │     ┌───┬───┬───┬───┬───┐                   │
+  │     │ E │ E │ E │ E │ E │                   │
+  │     └───┴───┴───┴───┴───┘                   │
+  ├─────────────────────────────────────────────┤
+  │ [3] LOW:       deque<Event>                 │
+  │     ┌───┐                                   │
+  │     │ E │      (processed last)             │
+  │     └───┘                                   │
+  └─────────────────────────────────────────────┘
+  ```
+
+  **Priority Selection:**
+  - Always dequeue from highest non-empty priority
+  - CRITICAL events bypass all others
+  - Prevents starvation via round-robin within priority
+end note
+
+note right of EventQueue
+  **Enqueue (Thread-Safe):**
+  ```cpp
+  void enqueue(Event event, Priority priority) {
+      lock_guard<mutex> lock(mutex_);
+
+      int priorityIndex = static_cast<int>(priority);
+      queues_[priorityIndex].push_back(event);
+
+      cv_.notify_one(); // Wake one waiting worker
+  }
+  ```
+
+  **Dequeue (Blocking, Priority-Based):**
+  ```cpp
+  Event dequeue(duration timeout) {
+      unique_lock<mutex> lock(mutex_);
+
+      auto deadline = chrono::steady_clock::now() + timeout;
+
+      while (running_) {
+          // Check queues in priority order
+          for (int p = 0; p < NUM_PRIORITIES; p++) {
+              if (!queues_[p].empty()) {
+                  Event event = queues_[p].front();
+                  queues_[p].pop_front();
+                  return event;
+              }
+          }
+
+          // No events, wait
+          if (cv_.wait_until(lock, deadline) == cv_status::timeout) {
+              throw TimeoutException();
+          }
+      }
+
+      throw ShutdownException();
+  }
+  ```
+
+  **Worker Thread Pattern:**
+  ```cpp
+  void workerThread() {
+      while (running_) {
+          try {
+              Event event = eventQueue_.dequeue(1s);
+              dispatchEvent(event);
+          } catch (TimeoutException&) {
+              // Normal timeout, continue
+          } catch (ShutdownException&) {
+              break;
+          }
+      }
+  }
+  ```
+
+  **Performance:**
+  - Enqueue: O(1)
+  - Dequeue: O(NUM_PRIORITIES) = O(1) (constant)
+  - Thread-safe via mutex
+  - Condition variable for efficient waiting
+  - No busy-wait, CPU-efficient
+end note
+
+@enduml
+
+@startuml Thread_Pool
+title Thread Pool - Fixed-Size Worker Pool
+
+class ThreadPool {
+    - workers_: vector<thread>
+    - taskQueue_: queue<Task>
+    - mutex_: mutex
+    - cv_: condition_variable
+    - stop_: atomic<bool>
+    - poolSize_: size_t
+    - activeTasks_: atomic<size_t>
+    __
+    + ThreadPool(poolSize: size_t)
+    + submit(task: function<void()>) : future<void>
+    + shutdown()
+    + getActiveTaskCount() : size_t
+    - workerLoop()
+}
+
+class Task {
+    + func: function<void()>
+    + promise: promise<void>
+}
+
+ThreadPool o-- Task
+
+note top of ThreadPool
+  **Thread Pool Architecture:**
+  ```
+  ThreadPool (size = 8)
+  ┌────────────────────────────────────────────┐
+  │ workers_:                                  │
+  │ ┌────────┐ ┌────────┐       ┌────────┐    │
+  │ │Thread 0│ │Thread 1│  ...  │Thread 7│    │
+  │ └───┬────┘ └───┬────┘       └───┬────┘    │
+  │     │          │                │         │
+  │     └──────────┼────────────────┘         │
+  │                ▼                          │
+  │     ┌──────────────────────┐              │
+  │     │  taskQueue_          │              │
+  │     │  ┌────┬────┬────┐    │              │
+  │     │  │Task│Task│Task│... │              │
+  │     │  └────┴────┴────┘    │              │
+  │     └──────────────────────┘              │
+  └────────────────────────────────────────────┘
+  ```
+
+  **Thread Creation:**
+  ```cpp
+  ThreadPool(size_t poolSize) : poolSize_(poolSize), stop_(false) {
+      workers_.reserve(poolSize);
+      for (size_t i = 0; i < poolSize; i++) {
+          workers_.emplace_back(&ThreadPool::workerLoop, this);
+      }
+  }
+  ```
+end note
+
+note right of ThreadPool
+  **Worker Loop:**
+  ```cpp
+  void workerLoop() {
+      while (true) {
+          Task task;
+          {
+              unique_lock<mutex> lock(mutex_);
+              cv_.wait(lock, [this] {
+                  return stop_ || !taskQueue_.empty();
+              });
+
+              if (stop_ && taskQueue_.empty()) {
+                  return; // Shutdown
+              }
+
+              task = std::move(taskQueue_.front());
+              taskQueue_.pop();
+              activeTasks_++;
+          }
+
+          // Execute task outside lock
+          try {
+              task.func();
+              task.promise.set_value();
+          } catch (...) {
+              task.promise.set_exception(current_exception());
+          }
+
+          activeTasks_--;
+      }
+  }
+  ```
+
+  **Task Submission:**
+  ```cpp
+  future<void> submit(function<void()> func) {
+      Task task;
+      task.func = std::move(func);
+      auto future = task.promise.get_future();
+
+      {
+          lock_guard<mutex> lock(mutex_);
+          if (stop_) {
+              throw runtime_error("ThreadPool is stopped");
+          }
+          taskQueue_.push(std::move(task));
+      }
+
+      cv_.notify_one(); // Wake one worker
+      return future;
+  }
+  ```
+
+  **Graceful Shutdown:**
+  ```cpp
+  void shutdown() {
+      {
+          lock_guard<mutex> lock(mutex_);
+          stop_ = true;
+      }
+
+      cv_.notify_all(); // Wake all workers
+
+      for (auto& worker : workers_) {
+          if (worker.joinable()) {
+              worker.join();
+          }
+      }
+  }
+  ```
+
+  **Performance:**
+  - Task submission: O(1)
+  - Worker wake-up: O(1)
+  - Typical pool size: 8-16 threads
+  - Queue overhead: ~100 ns per task
+  - Thread creation overhead: amortized (reuse)
+end note
+
+@enduml
+
+@startuml Module_Version_Map
+title Module Version Map - Multi-Version Storage
+
+class ModuleVersionMap {
+    - modules_: map<string, map<Version, Module*>>
+    - mutex_: shared_mutex
+    __
+    + insert(symbolicName: string, version: Version, module: Module*)
+    + findBest(symbolicName: string, range: VersionRange) : Module*
+    + getAll(symbolicName: string) : vector<Module*>
+    + erase(symbolicName: string, version: Version)
+}
+
+class Version {
+    - major_: int
+    - minor_: int
+    - patch_: int
+    - qualifier_: string
+    __
+    + Version(major, minor, patch, qualifier)
+    + operator<(other: Version) : bool
+    + operator==(other: Version) : bool
+    + isCompatible(other: Version) : bool
+}
+
+class VersionRange {
+    - minimum_: Version
+    - maximum_: Version
+    - includeMin_: bool
+    - includeMax_: bool
+    __
+    + includes(version: Version) : bool
+    + parse(rangeString: string) : VersionRange
+}
+
+ModuleVersionMap o-- Version
+
+note top of ModuleVersionMap
+  **Nested Map Structure:**
+  ```
+  modules_: map<string, map<Version, Module*>>
+
+  Example:
+  ┌─────────────────────────────────────────────┐
+  │ "com.example.moduleA" →                     │
+  │   ┌─────────────────────────────────────┐   │
+  │   │ Version(1,0,0) → Module*            │   │
+  │   │ Version(1,5,2) → Module*            │   │
+  │   │ Version(2,0,0) → Module*            │   │
+  │   └─────────────────────────────────────┘   │
+  ├─────────────────────────────────────────────┤
+  │ "com.example.moduleB" →                     │
+  │   ┌─────────────────────────────────────┐   │
+  │   │ Version(1,0,0) → Module*            │   │
+  │   │ Version(1,2,5) → Module*            │   │
+  │   └─────────────────────────────────────┘   │
+  └─────────────────────────────────────────────┘
+  ```
+
+  **Outer Map:**
+  - Key: symbolic name (string)
+  - Value: inner map of versions
+  - Complexity: O(log n) lookup by name
+
+  **Inner Map:**
+  - Key: Version (ordered by major.minor.patch)
+  - Value: Module*
+  - Complexity: O(log m) lookup by version
+  - Automatically sorted (std::map)
+end note
+
+note right of ModuleVersionMap
+  **Best Version Lookup:**
+  ```cpp
+  Module* findBest(const string& name, const VersionRange& range) {
+      shared_lock<shared_mutex> lock(mutex_);
+
+      auto it = modules_.find(name);
+      if (it == modules_.end()) {
+          return nullptr; // Module not found
+      }
+
+      auto& versionMap = it->second;
+      Module* bestMatch = nullptr;
+      Version bestVersion(0, 0, 0);
+
+      // Iterate in reverse (highest version first)
+      for (auto vit = versionMap.rbegin(); vit != versionMap.rend(); ++vit) {
+          const Version& version = vit->first;
+          Module* module = vit->second;
+
+          if (range.includes(version)) {
+              if (bestMatch == nullptr || version > bestVersion) {
+                  bestMatch = module;
+                  bestVersion = version;
+              }
+          }
+      }
+
+      return bestMatch;
+  }
+  ```
+
+  **Example Search:**
+  ```
+  findBest("com.example.moduleA", "[1.0.0, 2.0.0)")
+
+  Available versions: [1.0.0, 1.5.2, 2.0.0, 2.5.0]
+
+  Check 2.5.0: 2.5.0 < 2.0.0? No → skip
+  Check 2.0.0: 2.0.0 < 2.0.0? No (exclusive upper) → skip
+  Check 1.5.2: 1.5.2 in [1.0.0, 2.0.0)? Yes → bestMatch
+  Check 1.0.0: 1.0.0 in [1.0.0, 2.0.0)? Yes, but 1.5.2 > 1.0.0
+
+  Result: 1.5.2 (highest compatible version)
+  ```
+
+  **Version Comparison:**
+  ```cpp
+  bool Version::operator<(const Version& other) const {
+      if (major_ != other.major_) return major_ < other.major_;
+      if (minor_ != other.minor_) return minor_ < other.minor_;
+      if (patch_ != other.patch_) return patch_ < other.patch_;
+      return qualifier_ < other.qualifier_;
+  }
+  ```
+
+  **Complexity:**
+  - findBest: O(log n + m) where n=modules, m=versions
+  - Worst case: O(m) if all versions match range
+  - Typical: O(log n + log m) with early exit
+end note
+
+@enduml
+
+@startuml Memory_Pool
+title Memory Pool - Fixed-Size Allocator
+
+class MemoryPool {
+    - blockSize_: size_t
+    - poolSize_: size_t
+    - freeList_: FreeBlock*
+    - memory_: void*
+    - mutex_: mutex
+    - allocated_: atomic<size_t>
+    __
+    + MemoryPool(blockSize, poolSize)
+    + allocate() : void*
+    + deallocate(ptr: void*)
+    + getUtilization() : double
+}
+
+class FreeBlock {
+    + next: FreeBlock*
+}
+
+MemoryPool o-- FreeBlock
+
+note top of MemoryPool
+  **Memory Layout:**
+  ```
+  memory_ (contiguous allocation)
+  ┌──────────────────────────────────────────────────┐
+  │ Block 0 │ Block 1 │ Block 2 │ ... │ Block N-1    │
+  │ (64 B)  │ (64 B)  │ (64 B)  │     │ (64 B)       │
+  └──────────────────────────────────────────────────┘
+
+  Initial Free List (all blocks free):
+  freeList_ → Block 0 → Block 1 → Block 2 → ... → Block N-1 → nullptr
+  ```
+
+  **Initialization:**
+  ```cpp
+  MemoryPool(size_t blockSize, size_t poolSize)
+      : blockSize_(blockSize), poolSize_(poolSize), allocated_(0) {
+
+      // Allocate contiguous memory
+      memory_ = aligned_alloc(64, blockSize * poolSize);
+
+      // Build free list
+      freeList_ = reinterpret_cast<FreeBlock*>(memory_);
+      FreeBlock* current = freeList_;
+
+      for (size_t i = 0; i < poolSize - 1; i++) {
+          void* nextBlock = static_cast<char*>(memory_) +
+                            (i + 1) * blockSize;
+          current->next = reinterpret_cast<FreeBlock*>(nextBlock);
+          current = current->next;
+      }
+
+      current->next = nullptr; // Last block
+  }
+  ```
+end note
+
+note right of MemoryPool
+  **Allocate (O(1)):**
+  ```cpp
+  void* allocate() {
+      lock_guard<mutex> lock(mutex_);
+
+      if (freeList_ == nullptr) {
+          throw bad_alloc(); // Pool exhausted
+      }
+
+      FreeBlock* block = freeList_;
+      freeList_ = freeList_->next;
+
+      allocated_++;
+      return block;
+  }
+  ```
+
+  **Deallocate (O(1)):**
+  ```cpp
+  void deallocate(void* ptr) {
+      if (ptr == nullptr) return;
+
+      lock_guard<mutex> lock(mutex_);
+
+      FreeBlock* block = reinterpret_cast<FreeBlock*>(ptr);
+      block->next = freeList_;
+      freeList_ = block;
+
+      allocated_--;
+  }
+  ```
+
+  **Example Usage:**
+  ```cpp
+  // Create pool for 64-byte blocks, 1000 blocks
+  MemoryPool pool(64, 1000);
+
+  // Allocate
+  void* ptr1 = pool.allocate(); // O(1)
+  void* ptr2 = pool.allocate(); // O(1)
+
+  // Deallocate
+  pool.deallocate(ptr1); // O(1)
+
+  // Reuse
+  void* ptr3 = pool.allocate(); // Reuses ptr1's block
+  ```
+
+  **Benefits:**
+  - Fast allocation/deallocation: O(1)
+  - No fragmentation (fixed-size blocks)
+  - Cache-friendly (contiguous allocation)
+  - Predictable performance
+
+  **Limitations:**
+  - Fixed block size
+  - Fixed pool size
+  - Wasted space if object < block size
+
+  **Performance:**
+  - Allocation: ~10 ns
+  - Deallocation: ~5 ns
+  - Compare to malloc: ~100-500 ns
+  - 10-50x faster than general allocator
+end note
+
+@enduml
+
+@enduml

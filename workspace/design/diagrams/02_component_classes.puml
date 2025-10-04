@@ -1,0 +1,1414 @@
+@startuml CDMF_Component_Class_Diagrams
+
+title CDMF Core Component Classes - Detailed
+
+skinparam class {
+    BackgroundColor<<interface>> #E6F3FF
+    BackgroundColor<<abstract>> #FFE6E6
+    BackgroundColor<<concrete>> #E6FFE6
+    BorderColor Black
+    ArrowColor Black
+}
+
+' Framework Core Classes
+package "Framework Core" #Orange {
+
+    ' Component 1: Framework Manager
+    note as FrameworkManagerNote
+        **Framework Manager Component**
+        Initialization, Lifecycle, Shutdown
+    end note
+
+    interface Framework <<interface>> {
+        {abstract} + init() : void
+        {abstract} + start() : void
+        {abstract} + stop(timeout_ms: int) : void
+        {abstract} + waitForStop() : void
+        {abstract} + getState() : FrameworkState
+        {abstract} + getContext() : IModuleContext*
+        {abstract} + installModule(path: string) : Module*
+        {abstract} + updateModule(module: Module*, newPath: string) : void
+        {abstract} + uninstallModule(module: Module*) : void
+        {abstract} + getModules() : vector<Module*>
+        {abstract} + getModule(symbolicName: string, version: Version) : Module*
+        {abstract} + getProperties() : FrameworkProperties&
+        {abstract} + addFrameworkListener(listener: IFrameworkListener*) : void
+    }
+
+    class FrameworkImpl <<concrete>> {
+        - moduleRegistry_: unique_ptr<ModuleRegistry>
+        - serviceRegistry_: unique_ptr<ServiceRegistry>
+        - eventDispatcher_: unique_ptr<EventDispatcher>
+        - dependencyResolver_: unique_ptr<DependencyResolver>
+        - processManager_: unique_ptr<ProcessManager>
+        - configAdmin_: unique_ptr<ConfigurationAdmin>
+        - securityManager_: unique_ptr<PermissionManager>
+        - platformAbstraction_: unique_ptr<PlatformAbstraction>
+        - state_: atomic<FrameworkState>
+        - properties_: FrameworkProperties
+        - frameworkContext_: unique_ptr<FrameworkContext>
+        - listeners_: vector<IFrameworkListener*>
+        - listenersMutex_: shared_mutex
+        - stopCondition_: condition_variable
+        - stopMutex_: mutex
+        - stopRequested_: atomic<bool>
+        ..
+        + FrameworkImpl(props: FrameworkProperties&)
+        + ~FrameworkImpl()
+        + init() : void
+        + start() : void
+        + stop(timeout_ms: int) : void
+        + waitForStop() : void
+        + getState() : FrameworkState
+        - validateManifest(manifest: json&) : void
+        - fireFrameworkEvent(type: FrameworkEventType, module: Module*) : void
+    }
+
+    enum FrameworkState {
+        CREATED
+        STARTING
+        ACTIVE
+        STOPPING
+        STOPPED
+    }
+
+    class FrameworkProperties <<concrete>> {
+        - properties_: map<string, string>
+        ..
+        + enable_security: bool
+        + enable_ipc: bool
+        + verify_signatures: bool
+        + auto_start_modules: bool
+        + event_thread_pool_size: size_t
+        + service_cache_size: size_t
+        ..
+        + get(key: string) : string
+        + set(key: string, value: string) : void
+        + getInt(key: string, default: int) : int
+        + getBool(key: string, default: bool) : bool
+    }
+
+    ' Component 2: Platform Abstraction
+    note as PlatformAbstractionNote
+        **Platform Abstraction Component**
+        Dynamic Loading, Threading, IPC Primitives
+    end note
+
+    class PlatformAbstraction <<concrete>> {
+        - loaders_: map<string, unique_ptr<IDynamicLoader>>
+        - currentPlatform_: Platform
+        ..
+        + PlatformAbstraction()
+        + loadLibrary(path: string) : LibraryHandle
+        + unloadLibrary(handle: LibraryHandle) : void
+        + getSymbol(handle: LibraryHandle, name: string) : void*
+        + createThread(func: function<void()>) : thread
+        + getPlatform() : Platform
+        + getLibraryExtension() : string
+    }
+
+    interface IDynamicLoader <<interface>> {
+        {abstract} + load(path: string) : LibraryHandle
+        {abstract} + unload(handle: LibraryHandle) : void
+        {abstract} + getSymbol(handle: LibraryHandle, name: string) : void*
+    }
+
+    class LinuxLoader <<concrete>> {
+        - handles_: map<LibraryHandle, void*>
+        ..
+        + load(path: string) : LibraryHandle
+        + unload(handle: LibraryHandle) : void
+        + getSymbol(handle: LibraryHandle, name: string) : void*
+        - useDlopen(path: string, flags: int) : void*
+    }
+
+    class WindowsLoader <<concrete>> {
+        - handles_: map<LibraryHandle, HMODULE>
+        ..
+        + load(path: string) : LibraryHandle
+        + unload(handle: LibraryHandle) : void
+        + getSymbol(handle: LibraryHandle, name: string) : void*
+        - useLoadLibrary(path: string) : HMODULE
+    }
+
+    class ThreadPool <<concrete>> {
+        - workers_: vector<thread>
+        - tasks_: BlockingQueue<Task>
+        - mutex_: mutex
+        - condition_: condition_variable
+        - stop_: atomic<bool>
+        - numThreads_: size_t
+        ..
+        + ThreadPool(numThreads: size_t)
+        + ~ThreadPool()
+        + enqueue(task: function<void()>) : future<void>
+        + wait() : void
+        + shutdown() : void
+        - workerThread() : void
+    }
+
+    enum Platform {
+        LINUX
+        WINDOWS
+        MACOS
+        UNKNOWN
+    }
+
+    ' Component 3: Event Dispatcher
+    note as EventDispatcherNote
+        **Event Dispatcher Component**
+        Event Queue, Thread Pool, Listener Registry, Priority Dispatch
+    end note
+
+    class EventDispatcher <<concrete>> {
+        - listeners_: vector<ListenerEntry>
+        - listenersMutex_: shared_mutex
+        - threadPool_: unique_ptr<ThreadPool>
+        - eventQueue_: BlockingQueue<Event>
+        - running_: atomic<bool>
+        - dispatchThread_: thread
+        ..
+        + EventDispatcher(threadPoolSize: size_t)
+        + ~EventDispatcher()
+        + start() : void
+        + stop() : void
+        + addEventListener(listener: IEventListener*, filter: EventFilter&, priority: int) : void
+        + removeEventListener(listener: IEventListener*) : void
+        + fireEvent(event: Event&) : void
+        + fireEventSync(event: Event&) : void
+        - dispatchLoop() : void
+        - dispatchToListener(entry: ListenerEntry&, event: Event&) : void
+        - matchesFilter(event: Event&, filter: EventFilter&) : bool
+    }
+
+    class ListenerEntry <<concrete>> {
+        + listener: IEventListener*
+        + filter: EventFilter
+        + threadId: thread::id
+        + priority: int
+    }
+
+    interface IEventListener <<interface>> {
+        {abstract} + handleEvent(event: Event&) : void
+    }
+
+    class Event <<concrete>> {
+        - type_: string
+        - source_: void*
+        - timestamp_: time_point
+        - properties_: Properties
+        ..
+        + Event(type: string, source: void*)
+        + getType() : string
+        + getSource() : void*
+        + getTimestamp() : time_point
+        + getProperties() : Properties&
+        + setProperty(key: string, value: any) : void
+    }
+
+    class EventFilter <<concrete>> {
+        - filterString_: string
+        - filterTree_: unique_ptr<FilterNode>
+        ..
+        + EventFilter(filter: string)
+        + matches(event: Event&) : bool
+        - parseFilter(filter: string) : unique_ptr<FilterNode>
+        - evaluateNode(node: FilterNode*, event: Event&) : bool
+    }
+
+    class BlockingQueue<T> <<template>> {
+        - queue_: queue<T>
+        - mutex_: mutex
+        - condition_: condition_variable
+        - maxSize_: size_t
+        ..
+        + push(item: T) : void
+        + pop(timeout_ms: int) : T
+        + tryPop(item: T&) : bool
+        + size() : size_t
+        + isEmpty() : bool
+    }
+
+    Framework <|-- FrameworkImpl
+    FrameworkImpl *-- FrameworkProperties
+    FrameworkImpl --> FrameworkState
+    FrameworkImpl --> PlatformAbstraction
+    FrameworkImpl --> EventDispatcher
+    PlatformAbstraction --> IDynamicLoader
+    PlatformAbstraction --> Platform
+    PlatformAbstraction --> ThreadPool
+    IDynamicLoader <|-- LinuxLoader
+    IDynamicLoader <|-- WindowsLoader
+    EventDispatcher *-- ListenerEntry
+    EventDispatcher --> IEventListener
+    EventDispatcher --> Event
+    EventDispatcher --> EventFilter
+    EventDispatcher --> ThreadPool
+    EventDispatcher --> BlockingQueue
+    ListenerEntry --> EventFilter
+}
+
+' Module Management Classes
+package "Module Management Layer" #LightCoral {
+
+    ' Component 1: Module Registry
+    note as ModuleRegistryNote
+        **Module Registry Component**
+        Module Storage, Version Map, Dependency Graph
+    end note
+
+    class ModuleRegistry <<concrete>> {
+        - modules_: map<string, unique_ptr<Module>>
+        - versionMap_: map<string, map<Version, Module*>>
+        - dependencies_: map<Module*, set<Module*>>
+        - dependents_: map<Module*, set<Module*>>
+        - mutex_: shared_mutex
+        - framework_: Framework*
+        ..
+        + ModuleRegistry(framework: Framework*)
+        + registerModule(module: unique_ptr<Module>) : void
+        + unregisterModule(symbolicName: string) : void
+        + getModule(symbolicName: string) : Module*
+        + getModule(symbolicName: string, version: Version) : Module*
+        + getModules() : vector<Module*>
+        + getModules(symbolicName: string) : vector<Module*>
+        + addDependency(dependent: Module*, dependency: Module*) : void
+        + removeDependency(dependent: Module*, dependency: Module*) : void
+        + getDependencies(module: Module*) : set<Module*>
+        + getDependents(module: Module*) : set<Module*>
+        + getModulesInState(state: ModuleState) : vector<Module*>
+        + getModuleCount() : size_t
+    }
+
+    interface Module <<interface>> {
+        {abstract} + getSymbolicName() : string
+        {abstract} + getVersion() : Version
+        {abstract} + getLocation() : string
+        {abstract} + getModuleId() : uint64_t
+        {abstract} + start() : void
+        {abstract} + stop() : void
+        {abstract} + update(location: string) : void
+        {abstract} + uninstall() : void
+        {abstract} + getState() : ModuleState
+        {abstract} + getContext() : IModuleContext*
+        {abstract} + getRegisteredServices() : vector<ServiceRegistration>
+        {abstract} + getServicesInUse() : vector<ServiceReference>
+        {abstract} + getManifest() : json&
+        {abstract} + getHeaders() : map<string, string>
+        {abstract} + addModuleListener(listener: IModuleListener*) : void
+    }
+
+    class ModuleImpl <<concrete>> {
+        - moduleId_: uint64_t
+        - symbolicName_: string
+        - version_: Version
+        - location_: string
+        - state_: atomic<ModuleState>
+        - manifest_: json
+        - handle_: unique_ptr<ModuleHandle>
+        - activator_: unique_ptr<IModuleActivator>
+        - context_: unique_ptr<ModuleContext>
+        - framework_: Framework*
+        - registeredServices_: vector<ServiceRegistration>
+        - listeners_: vector<IModuleListener*>
+        - mutex_: shared_mutex
+        ..
+        + ModuleImpl(handle: unique_ptr<ModuleHandle>, manifest: json&, framework: Framework*)
+        + ~ModuleImpl()
+        + start() : void
+        + stop() : void
+        + update(location: string) : void
+        + uninstall() : void
+        + getState() : ModuleState
+        - transitionTo(newState: ModuleState) : void
+        - createActivator() : void
+        - destroyActivator() : void
+        - notifyStateChange(oldState: ModuleState, newState: ModuleState) : void
+    }
+
+    enum ModuleState {
+        INSTALLED
+        RESOLVED
+        STARTING
+        ACTIVE
+        STOPPING
+        UNINSTALLED
+    }
+
+    interface IModuleActivator <<interface>> {
+        {abstract} + start(context: IModuleContext*) : void
+        {abstract} + stop(context: IModuleContext*) : void
+    }
+
+    interface IModuleContext <<interface>> {
+        {abstract} + getModule() : Module*
+        {abstract} + getProperties() : FrameworkProperties&
+        {abstract} + getProperty(key: string) : string
+        {abstract} + registerService(interfaceName: string, service: void*, props: Properties&) : ServiceRegistration
+        {abstract} + getServiceReferences(interfaceName: string, filter: string) : vector<ServiceReference>
+        {abstract} + getServiceReference(interfaceName: string) : ServiceReference
+        {abstract} + getService(ref: ServiceReference&) : shared_ptr<void>
+        {abstract} + ungetService(ref: ServiceReference&) : bool
+        {abstract} + addEventListener(listener: IEventListener*, filter: EventFilter&) : void
+        {abstract} + removeEventListener(listener: IEventListener*) : void
+        {abstract} + fireEvent(event: Event&) : void
+        {abstract} + installModule(location: string) : Module*
+        {abstract} + getModules() : vector<Module*>
+    }
+
+    ' Component 2: Module Loader
+    note as ModuleLoaderNote
+        **Module Loader Component**
+        Platform Abstraction (Linux/Windows), Symbol Resolution, Manifest Parser
+    end note
+
+    class ModuleLoader <<concrete>> {
+        - platformLoader_: unique_ptr<IDynamicLoader>
+        - securityManager_: PermissionManager*
+        - framework_: Framework*
+        ..
+        + ModuleLoader(framework: Framework*, security: PermissionManager*)
+        + loadModule(path: string) : unique_ptr<Module>
+        + unloadModule(module: Module*) : void
+        - parseManifest(path: string) : json
+        - validateManifest(manifest: json&) : bool
+        - resolveSymbol(handle: LibraryHandle, symbolName: string) : void*
+        - createModuleActivator(handle: LibraryHandle) : unique_ptr<IModuleActivator>
+    }
+
+    class ModuleHandle <<concrete>> {
+        - libraryHandle_: LibraryHandle
+        - loader_: IDynamicLoader*
+        - path_: string
+        ..
+        + ModuleHandle(handle: LibraryHandle, loader: IDynamicLoader*, path: string)
+        + ~ModuleHandle()
+        + getSymbol(name: string) : void*
+        + getPath() : string
+    }
+
+    class ManifestParser <<concrete>> {
+        ..
+        + {static} parse(path: string) : json
+        + {static} validate(manifest: json&) : bool
+        - {static} parseHeaders(manifest: json&) : map<string, string>
+        - {static} parseDependencies(manifest: json&) : vector<Dependency>
+    }
+
+    ' Component 3: Dependency Resolver
+    note as DependencyResolverNote
+        **Dependency Resolver Component**
+        Dependency Graph Builder, Topological Sort (Kahn's), Cycle Detection (DFS)
+    end note
+
+    class DependencyResolver <<concrete>> {
+        - moduleRegistry_: ModuleRegistry*
+        ..
+        + DependencyResolver(registry: ModuleRegistry*)
+        + resolve(module: Module*) : bool
+        + resolveAll() : bool
+        + getStartOrder(modules: vector<Module*>) : vector<Module*>
+        + getStopOrder(modules: vector<Module*>) : vector<Module*>
+        + hasCycle() : bool
+        + findCycles() : vector<vector<Module*>>
+        + getTransitiveDependencies(module: Module*) : set<Module*>
+        + getTransitiveDependents(module: Module*) : set<Module*>
+        - buildGraph() : DependencyGraph
+        - topologicalSort(modules: vector<Module*>) : vector<Module*>
+    }
+
+    class DependencyGraph <<concrete>> {
+        + dependencies: map<Module*, set<Module*>>
+        + dependents: map<Module*, set<Module*>>
+    }
+
+    class Dependency <<concrete>> {
+        + symbolicName: string
+        + versionRange: VersionRange
+        + optional: bool
+        ..
+        + Dependency(name: string, range: VersionRange, isOptional: bool)
+        + matches(module: Module*) : bool
+    }
+
+    ' Component 4: Version Manager
+    note as VersionManagerNote
+        **Version Manager Component**
+        Semantic Versioning (MAJOR.MINOR.PATCH), Version Range Parser, Compatibility Checker
+    end note
+
+    class VersionManager <<concrete>> {
+        ..
+        + {static} parse(versionString: string) : Version
+        + {static} parseRange(rangeString: string) : VersionRange
+        + {static} isCompatible(v1: Version&, v2: Version&) : bool
+        + {static} compare(v1: Version&, v2: Version&) : int
+        + {static} findBestMatch(available: vector<Version>, range: VersionRange&) : Version
+    }
+
+    class Version <<concrete>> {
+        - major_: int
+        - minor_: int
+        - patch_: int
+        - qualifier_: string
+        ..
+        + Version(major: int, minor: int, patch: int, qualifier: string)
+        + {static} parse(versionString: string) : Version
+        + getMajor() : int
+        + getMinor() : int
+        + getPatch() : int
+        + getQualifier() : string
+        + toString() : string
+        + isCompatibleWith(other: Version&) : bool
+        + operator==(other: Version&) : bool
+        + operator<(other: Version&) : bool
+        + operator>(other: Version&) : bool
+    }
+
+    class VersionRange <<concrete>> {
+        - minimum_: Version
+        - maximum_: Version
+        - includeMinimum_: bool
+        - includeMaximum_: bool
+        ..
+        + {static} parse(rangeString: string) : VersionRange
+        + includes(version: Version&) : bool
+        + getMinimum() : Version
+        + getMaximum() : Version
+    }
+
+    ' Relationships within Module Management Layer
+    ModuleRegistry o-- Module
+    Module <|-- ModuleImpl
+    ModuleImpl *-- ModuleState
+    ModuleImpl o-- IModuleActivator
+    ModuleImpl --> IModuleContext
+    ModuleImpl *-- Version
+    ModuleImpl --> ModuleHandle
+
+    ModuleLoader --> ModuleHandle
+    ModuleLoader --> ManifestParser
+    ModuleLoader --> Module
+    ModuleHandle --> IDynamicLoader
+
+    DependencyResolver --> ModuleRegistry
+    DependencyResolver --> DependencyGraph
+    DependencyResolver --> Module
+    Dependency --> VersionRange
+
+    VersionManager --> Version
+    VersionManager --> VersionRange
+    Version <.. VersionRange
+}
+
+' Framework Services Layer Classes
+package "Framework Services Layer" #LightGreen {
+
+    ' Component 1: Configuration Service
+    note as ConfigurationServiceNote
+        **Configuration Service Component**
+        Property Management, File Persistence, Dynamic Updates
+    end note
+
+    class ConfigurationAdmin <<concrete>> {
+        - configurations_: map<string, unique_ptr<Configuration>>
+        - listeners_: vector<ConfigurationListener*>
+        - mutex_: shared_mutex
+        - persistenceManager_: unique_ptr<PersistenceManager>
+        ..
+        + createConfiguration(pid: string) : Configuration*
+        + getConfiguration(pid: string) : Configuration*
+        + listConfigurations(filter: string) : vector<Configuration*>
+        + deleteConfiguration(pid: string) : void
+        + addConfigurationListener(listener: ConfigurationListener*) : void
+        + removeConfigurationListener(listener: ConfigurationListener*) : void
+        - notifyListeners(event: ConfigurationEvent&) : void
+    }
+
+    class Configuration <<concrete>> {
+        - pid_: string
+        - properties_: Properties
+        - mutex_: shared_mutex
+        ..
+        + Configuration(pid: string)
+        + getPid() : string
+        + getProperties() : Properties&
+        + update(properties: Properties&) : void
+        + remove() : void
+    }
+
+    interface ConfigurationListener <<interface>> {
+        {abstract} + configurationEvent(event: ConfigurationEvent&) : void
+    }
+
+    class ConfigurationEvent <<concrete>> {
+        + type: ConfigurationEventType
+        + pid: string
+        + factoryPid: string
+        + reference: Configuration*
+        ..
+        + ConfigurationEvent(type: ConfigurationEventType, pid: string)
+    }
+
+    enum ConfigurationEventType {
+        CREATED
+        UPDATED
+        DELETED
+    }
+
+    class PersistenceManager <<concrete>> {
+        - storageDir_: string
+        ..
+        + load(pid: string) : Properties
+        + save(pid: string, properties: Properties&) : void
+        + remove(pid: string) : void
+        + listAll() : vector<string>
+        - getFilePath(pid: string) : string
+    }
+
+    ' Component 2: Logging Service
+    note as LoggingServiceNote
+        **Logging Service Component**
+        Multi-level Logging, Async Appenders, Log Rotation
+    end note
+
+    class LogService <<concrete>> {
+        - loggers_: map<string, unique_ptr<Logger>>
+        - appenders_: vector<unique_ptr<Appender>>
+        - asyncQueue_: BlockingQueue<LogEntry>
+        - workerThread_: thread
+        - running_: atomic<bool>
+        - mutex_: shared_mutex
+        ..
+        + getLogger(name: string) : Logger*
+        + log(level: LogLevel, message: string) : void
+        + log(level: LogLevel, message: string, module: Module*) : void
+        + addAppender(appender: unique_ptr<Appender>) : void
+        + removeAppender(appender: Appender*) : void
+        + setLogLevel(level: LogLevel) : void
+        - processLogEntry(entry: LogEntry&) : void
+    }
+
+    class Logger <<concrete>> {
+        - name_: string
+        - level_: LogLevel
+        - logService_: LogService*
+        ..
+        + Logger(name: string, service: LogService*)
+        + trace(message: string) : void
+        + debug(message: string) : void
+        + info(message: string) : void
+        + warn(message: string) : void
+        + error(message: string) : void
+        + fatal(message: string) : void
+        + log(level: LogLevel, message: string) : void
+        + setLevel(level: LogLevel) : void
+        + isEnabled(level: LogLevel) : bool
+    }
+
+    enum LogLevel {
+        TRACE = 0
+        DEBUG = 1
+        INFO = 2
+        WARN = 3
+        ERROR = 4
+        FATAL = 5
+    }
+
+    class LogEntry <<concrete>> {
+        + timestamp: chrono::system_clock::time_point
+        + level: LogLevel
+        + logger: string
+        + message: string
+        + threadId: thread::id
+        + moduleName: string
+        ..
+        + LogEntry(level: LogLevel, logger: string, message: string)
+        + format() : string
+    }
+
+    interface Appender <<interface>> {
+        {abstract} + append(entry: LogEntry&) : void
+        {abstract} + flush() : void
+    }
+
+    class ConsoleAppender <<concrete>> {
+        - colorEnabled_: bool
+        ..
+        + append(entry: LogEntry&) : void
+        + flush() : void
+        - formatWithColor(entry: LogEntry&) : string
+    }
+
+    class FileAppender <<concrete>> {
+        - filePath_: string
+        - fileStream_: ofstream
+        - maxSize_: size_t
+        - maxBackups_: int
+        - mutex_: mutex
+        ..
+        + FileAppender(filePath: string)
+        + append(entry: LogEntry&) : void
+        + flush() : void
+        - rotate() : void
+    }
+
+    class SyslogAppender <<concrete>> {
+        - ident_: string
+        - facility_: int
+        ..
+        + SyslogAppender(ident: string, facility: int)
+        + append(entry: LogEntry&) : void
+        + flush() : void
+        - mapLevel(level: LogLevel) : int
+    }
+
+    ' Component 3: Security Service
+    note as SecurityServiceNote
+        **Security Service Component**
+        Authentication, Authorization, Audit Logging
+    end note
+
+    class SecurityService <<concrete>> {
+        - securityManager_: PermissionManager*
+        - auditLogger_: unique_ptr<AuditLogger>
+        - authProviders_: vector<unique_ptr<AuthenticationProvider>>
+        - mutex_: shared_mutex
+        ..
+        + authenticate(credentials: Credentials&) : AuthenticationToken
+        + authorize(token: AuthenticationToken&, permission: Permission&) : bool
+        + checkPermission(module: Module*, permission: Permission&) : bool
+        + grantPermission(module: Module*, permission: Permission&) : void
+        + revokePermission(module: Module*, permission: Permission&) : void
+        + audit(event: AuditEvent&) : void
+    }
+
+    interface AuthenticationProvider <<interface>> {
+        {abstract} + authenticate(credentials: Credentials&) : AuthenticationToken
+        {abstract} + supports(credentialsType: string) : bool
+    }
+
+    class Credentials <<concrete>> {
+        - type_: string
+        - principal_: string
+        - data_: map<string, any>
+        ..
+        + Credentials(type: string, principal: string)
+        + getType() : string
+        + getPrincipal() : string
+        + getData(key: string) : any
+    }
+
+    class AuthenticationToken <<concrete>> {
+        - principal_: string
+        - authorities_: vector<string>
+        - expiresAt_: chrono::system_clock::time_point
+        ..
+        + AuthenticationToken(principal: string)
+        + getPrincipal() : string
+        + getAuthorities() : vector<string>
+        + isExpired() : bool
+    }
+
+    class AuditLogger <<concrete>> {
+        - logFile_: ofstream
+        - mutex_: mutex
+        ..
+        + log(event: AuditEvent&) : void
+        + query(filter: AuditFilter&) : vector<AuditEvent>
+    }
+
+    class AuditEvent <<concrete>> {
+        + timestamp: chrono::system_clock::time_point
+        + type: AuditEventType
+        + principal: string
+        + action: string
+        + resource: string
+        + result: string
+        ..
+        + AuditEvent(type: AuditEventType, principal: string, action: string)
+    }
+
+    enum AuditEventType {
+        AUTHENTICATION
+        AUTHORIZATION
+        PERMISSION_GRANT
+        PERMISSION_REVOKE
+        MODULE_LOAD
+        MODULE_UNLOAD
+        SERVICE_ACCESS
+    }
+
+    ' Component 4: Event Management
+    note as EventManagementNote
+        **Event Management Component**
+        Event Bus, Topic-based Routing, Async Delivery
+    end note
+
+    class EventAdmin <<concrete>> {
+        - eventDispatcher_: EventDispatcher*
+        - topicHandlers_: map<string, vector<EventHandler*>>
+        - mutex_: shared_mutex
+        ..
+        + EventAdmin(dispatcher: EventDispatcher*)
+        + postEvent(event: Event&) : void
+        + sendEvent(event: Event&) : void
+        + subscribe(topic: string, handler: EventHandler*) : void
+        + unsubscribe(topic: string, handler: EventHandler*) : void
+        - matchTopic(topic: string, pattern: string) : bool
+    }
+
+    interface EventHandler <<interface>> {
+        {abstract} + handleEvent(event: Event&) : void
+    }
+
+    class EventProperties <<concrete>> {
+        - properties_: map<string, any>
+        ..
+        + set(key: string, value: any) : void
+        + get(key: string) : any
+        + has(key: string) : bool
+        + keys() : vector<string>
+    }
+
+    ' Relationships within Framework Services Layer
+    ConfigurationAdmin *-- Configuration
+    ConfigurationAdmin --> ConfigurationListener
+    ConfigurationAdmin --> PersistenceManager
+    Configuration *-- Properties
+    ConfigurationEvent *-- ConfigurationEventType
+
+    LogService *-- Logger
+    LogService --> Appender
+    LogService *-- LogEntry
+    Logger *-- LogLevel
+    LogEntry *-- LogLevel
+    Appender <|-- ConsoleAppender
+    Appender <|-- FileAppender
+    Appender <|-- SyslogAppender
+
+    SecurityService --> PermissionManager
+    SecurityService --> AuthenticationProvider
+    SecurityService --> AuditLogger
+    SecurityService *-- Credentials
+    SecurityService *-- AuthenticationToken
+    AuditLogger *-- AuditEvent
+    AuditEvent *-- AuditEventType
+
+    EventAdmin --> EventDispatcher
+    EventAdmin --> EventHandler
+    Event *-- EventProperties
+}
+
+' Service Layer Classes
+package "Service Layer" #LightYellow {
+
+    ' Component 1: Service Registry
+    note as ServiceRegistryNote
+        **Service Registry Component**
+        Service Storage (HashMap), Service Lookup (O(1)), Ranking Algorithm
+    end note
+
+    class ServiceRegistry <<concrete>> {
+        - services_: unordered_map<string, vector<ServiceEntry>>
+        - nextServiceId_: atomic<uint64_t>
+        - serviceById_: unordered_map<uint64_t, ServiceEntry*>
+        - listeners_: vector<IServiceListener*>
+        - mutex_: shared_mutex
+        ..
+        + ServiceRegistry()
+        + registerService(interfaceName: string, service: void*, module: Module*, props: Properties&) : ServiceRegistration
+        + unregisterService(serviceId: uint64_t) : void
+        + getServiceReferences(interfaceName: string, filter: string) : vector<ServiceReference>
+        + getServiceReference(interfaceName: string) : ServiceReference
+        + getService(ref: ServiceReference&) : void*
+        + ungetService(ref: ServiceReference&) : bool
+        + getRegisteredInterfaces() : vector<string>
+        + getServiceCount() : size_t
+        + getServicesInUse(module: Module*) : vector<ServiceReference>
+        + addServiceListener(listener: IServiceListener*, filter: string) : void
+        + removeServiceListener(listener: IServiceListener*) : void
+        - notifyServiceRegistered(ref: ServiceReference&) : void
+        - notifyServiceUnregistering(ref: ServiceReference&) : void
+        - notifyServiceModified(ref: ServiceReference&) : void
+        - findServices(interfaceName: string, filter: string) : vector<ServiceEntry*>
+        - matchesFilter(entry: ServiceEntry&, filter: string) : bool
+        - rankServices(services: vector<ServiceEntry*>) : vector<ServiceEntry*>
+    }
+
+    class ServiceEntry <<concrete>> {
+        + serviceId: uint64_t
+        + interfaceName: string
+        + serviceObject: void*
+        + servicePtr: weak_ptr<void>
+        + owningModule: Module*
+        + properties: Properties
+        + ranking: int
+        + useCount: atomic<int>
+        + registrationTime: time_point
+        ..
+        + ServiceEntry()
+        + compareTo(other: ServiceEntry&) : int
+    }
+
+    class ServiceReference <<concrete>> {
+        - serviceId_: uint64_t
+        - interfaceName_: string
+        - properties_: Properties
+        ..
+        + ServiceReference()
+        + ServiceReference(id: uint64_t, iface: string, props: Properties&)
+        + isValid() : bool
+        + getServiceId() : uint64_t
+        + getInterfaceName() : string
+        + getProperties() : Properties&
+        + getProperty(key: string) : string
+        + getRanking() : int
+        + operator==(other: ServiceReference&) : bool
+        + operator<(other: ServiceReference&) : bool
+    }
+
+    class ServiceRegistration <<concrete>> {
+        - serviceId_: uint64_t
+        - registry_: ServiceRegistry*
+        - unregistered_: atomic<bool>
+        ..
+        + ServiceRegistration()
+        + ServiceRegistration(id: uint64_t, registry: ServiceRegistry*)
+        + ~ServiceRegistration()
+        + unregister() : void
+        + setProperties(props: Properties&) : void
+        + getReference() : ServiceReference
+        ..
+        ' Move-only
+        + ServiceRegistration(other&&)
+        + operator=(other&&)
+        - ServiceRegistration(other&) = delete
+        - operator=(other&) = delete
+    }
+
+    interface IServiceListener <<interface>> {
+        {abstract} + serviceChanged(event: ServiceEvent&) : void
+    }
+
+    class ServiceEvent <<concrete>> {
+        + type: ServiceEventType
+        + reference: ServiceReference
+        ..
+        + ServiceEvent(type: ServiceEventType, ref: ServiceReference&)
+    }
+
+    enum ServiceEventType {
+        REGISTERED
+        MODIFIED
+        UNREGISTERING
+    }
+
+    ' Component 2: Service Tracker
+    note as ServiceTrackerNote
+        **Service Tracker Component**
+        Tracked Services (Map), Listener Management, Auto Discovery
+    end note
+
+    class ServiceTracker<T> <<template>> {
+        - context_: IModuleContext*
+        - interfaceName_: string
+        - filter_: string
+        - trackedServices_: map<ServiceReference, shared_ptr<T>>
+        - mutex_: shared_mutex
+        - listener_: unique_ptr<InternalListener>
+        - addCallback_: function<void(shared_ptr<T>)>
+        - modifiedCallback_: function<void(shared_ptr<T>)>
+        - removedCallback_: function<void(shared_ptr<T>)>
+        - opened_: atomic<bool>
+        ..
+        + ServiceTracker(context: IModuleContext*, interfaceName: string, filter: string)
+        + ~ServiceTracker()
+        + open() : void
+        + close() : void
+        + onServiceAdded(callback: function<void(shared_ptr<T>)>) : void
+        + onServiceModified(callback: function<void(shared_ptr<T>)>) : void
+        + onServiceRemoved(callback: function<void(shared_ptr<T>)>) : void
+        + getServices() : vector<shared_ptr<T>>
+        + getService() : shared_ptr<T>
+        + size() : size_t
+        + isEmpty() : bool
+        - handleServiceEvent(event: ServiceEvent&) : void
+        - addService(ref: ServiceReference&) : shared_ptr<T>
+        - modifyService(ref: ServiceReference&) : void
+        - removeService(ref: ServiceReference&) : void
+    }
+
+    ' Component 3: Service Proxy Factory
+    note as ServiceProxyFactoryNote
+        **Service Proxy Factory Component**
+        Proxy Generator, Stub Dispatcher, IPC Bridge
+    end note
+
+    class ServiceProxyFactory <<concrete>> {
+        - proxyCache_: map<ServiceReference, shared_ptr<void>>
+        - transportManager_: ITransport*
+        - serializer_: ISerializer*
+        - mutex_: shared_mutex
+        ..
+        + ServiceProxyFactory(transport: ITransport*, serializer: ISerializer*)
+        + createProxy(ref: ServiceReference&, interfaceName: string) : shared_ptr<void>
+        + destroyProxy(ref: ServiceReference&) : void
+        + isProxied(ref: ServiceReference&) : bool
+        - generateProxy(interfaceName: string) : shared_ptr<void>
+    }
+
+    interface IProxyGenerator <<interface>> {
+        {abstract} + generate(interfaceName: string) : shared_ptr<void>
+        {abstract} + supports(interfaceName: string) : bool
+    }
+
+    class ReflectionProxyGenerator <<concrete>> {
+        - metadata_: map<string, InterfaceMetadata>
+        ..
+        + generate(interfaceName: string) : shared_ptr<void>
+        + supports(interfaceName: string) : bool
+        + registerInterface(metadata: InterfaceMetadata&) : void
+    }
+
+    class InterfaceMetadata <<concrete>> {
+        + interfaceName: string
+        + methods: vector<MethodMetadata>
+        ..
+        + InterfaceMetadata(name: string)
+        + addMethod(method: MethodMetadata&) : void
+    }
+
+    class MethodMetadata <<concrete>> {
+        + methodName: string
+        + returnType: string
+        + parameters: vector<ParameterMetadata>
+        ..
+        + MethodMetadata(name: string, returnType: string)
+    }
+
+    ' Shared classes
+    class Properties <<concrete>> {
+        - properties_: map<string, any>
+        ..
+        + Properties()
+        + get(key: string) : string
+        + set(key: string, value: any) : void
+        + getInt(key: string, default: int) : int
+        + getBool(key: string, default: bool) : bool
+        + getDouble(key: string, default: double) : double
+        + has(key: string) : bool
+        + remove(key: string) : void
+        + keys() : vector<string>
+    }
+
+    ' Relationships within Service Layer
+    ServiceRegistry *-- ServiceEntry
+    ServiceRegistry ..> ServiceReference : creates
+    ServiceRegistry ..> ServiceRegistration : creates
+    ServiceRegistry --> IServiceListener
+    ServiceEntry *-- Properties
+    ServiceReference *-- Properties
+    ServiceRegistration --> ServiceRegistry
+    ServiceEvent *-- ServiceEventType
+    ServiceEvent --> ServiceReference
+
+    ServiceTracker --> ServiceReference
+    ServiceTracker --> IModuleContext
+    ServiceTracker ..> IServiceListener : implements
+
+    ServiceProxyFactory --> ServiceReference
+    ServiceProxyFactory --> IProxyGenerator
+    IProxyGenerator <|-- ReflectionProxyGenerator
+    ReflectionProxyGenerator *-- InterfaceMetadata
+    InterfaceMetadata *-- MethodMetadata
+}
+
+
+
+' IPC Infrastructure Layer - Consolidated
+package "IPC Infrastructure Layer" #Lavender {
+
+    ' Component 1: Transport Manager
+    note as TransportManagerNote
+        **Transport Manager Component**
+        Unix Socket (50-100μs), Shared Memory (10-20μs), gRPC (1-10ms)
+    end note
+    interface ITransport <<interface>> {
+        {abstract} + bind(address: string) : void
+        {abstract} + connect(address: string) : void
+        {abstract} + send(msg: Message&) : void
+        {abstract} + receive(timeout_ms: int) : Message
+        {abstract} + close() : void
+        {abstract} + getLatency() : chrono::microseconds
+    }
+
+    class UnixSocketTransport <<concrete>> {
+        - serverSocket_: int
+        - clientSocket_: int
+        - socketPath_: string
+        - connections_: map<int, Connection>
+        - epollFd_: int
+        - running_: atomic<bool>
+        ..
+        + UnixSocketTransport()
+        + ~UnixSocketTransport()
+        + bind(address: string) : void
+        + connect(address: string) : void
+        + send(msg: Message&) : void
+        + receive(timeout_ms: int) : Message
+        + close() : void
+        + getLatency() : chrono::microseconds {50-100μs}
+        - acceptConnection() : void
+        - handleEpollEvents() : void
+    }
+
+    class SharedMemoryTransport <<concrete>> {
+        - shmFd_: int
+        - shmAddr_: void*
+        - ringBuffer_: RingBuffer*
+        - readSemaphore_: sem_t*
+        - writeSemaphore_: sem_t*
+        - shmName_: string
+        - size_: size_t
+        ..
+        + SharedMemoryTransport(size: size_t)
+        + ~SharedMemoryTransport()
+        + bind(address: string) : void
+        + connect(address: string) : void
+        + send(msg: Message&) : void
+        + receive(timeout_ms: int) : Message
+        + close() : void
+        + getLatency() : chrono::microseconds {10-20μs}
+        - allocateBuffer(size: size_t) : void*
+        - commitBuffer(buffer: void*, size: size_t) : void
+    }
+
+    class GrpcTransport <<concrete>> {
+        - channel_: shared_ptr<grpc::Channel>
+        - stub_: unique_ptr<ModuleService::Stub>
+        - endpoint_: string
+        - tlsCredentials_: grpc::SslCredentialsOptions
+        ..
+        + GrpcTransport(endpoint: string)
+        + ~GrpcTransport()
+        + bind(address: string) : void
+        + connect(address: string) : void
+        + send(msg: Message&) : void
+        + receive(timeout_ms: int) : Message
+        + close() : void
+        + getLatency() : chrono::microseconds {1000-10000μs}
+        - createChannel() : shared_ptr<grpc::Channel>
+    }
+
+    class RingBuffer <<concrete>> {
+        + writePos: atomic<uint64_t>
+        + readPos: atomic<uint64_t>
+        + size: uint64_t
+        + data: char[]
+        ..
+        + RingBuffer(size: size_t)
+        + allocateChunk(size: size_t) : void*
+        + commit(buffer: void*, size: size_t) : void
+        + getNextChunk(size: size_t&) : void*
+        + release(buffer: void*) : void
+        + availableSpace() : size_t
+        + availableData() : size_t
+    }
+
+    ITransport <|-- UnixSocketTransport
+    ITransport <|-- SharedMemoryTransport
+    ITransport <|-- GrpcTransport
+    SharedMemoryTransport *-- RingBuffer
+
+    ' Component 2: Serialization Engine
+    note as SerializationEngineNote
+        **Serialization Engine Component**
+        Protocol Buffers (Default), FlatBuffers (Zero-copy)
+    end note
+    class Message <<concrete>> {
+        - magic_: uint32_t {0x43444D46}
+        - version_: uint16_t {0x0100}
+        - type_: MessageType
+        - length_: uint32_t
+        - requestId_: uint64_t
+        - flags_: uint32_t
+        - payload_: vector<uint8_t>
+        ..
+        + Message(type: MessageType, payload: vector<uint8_t>)
+        + getType() : MessageType
+        + getPayload() : vector<uint8_t>&
+        + getRequestId() : uint64_t
+        + setRequestId(id: uint64_t) : void
+        + serialize() : vector<uint8_t>
+        + {static} deserialize(data: vector<uint8_t>) : Message
+    }
+
+    enum MessageType {
+        SERVICE_CALL = 0x0001
+        SERVICE_RESPONSE = 0x0002
+        EVENT_NOTIFICATION = 0x0003
+        HEARTBEAT = 0x0004
+        ERROR = 0x00FF
+    }
+
+    interface ISerializer <<interface>> {
+        {abstract} + serialize(obj: void*) : vector<uint8_t>
+        {abstract} + deserialize(data: vector<uint8_t>, type: type_info&) : void*
+    }
+
+    class ProtoBufSerializer <<concrete>> {
+        + serialize(obj: void*) : vector<uint8_t>
+        + deserialize(data: vector<uint8_t>, type: type_info&) : void*
+        - serializeMessage(msg: pb::Message*) : vector<uint8_t>
+        - deserializeMessage(data: vector<uint8_t>, msg: pb::Message*) : void
+    }
+
+    class FlatBuffersSerializer <<concrete>> {
+        + serialize(obj: void*) : vector<uint8_t>
+        + deserialize(data: vector<uint8_t>, type: type_info&) : void*
+        - buildFlatBuffer(obj: void*) : vector<uint8_t>
+    }
+
+    Message *-- MessageType
+    ISerializer <|-- ProtoBufSerializer
+    ISerializer <|-- FlatBuffersSerializer
+
+    ' Component 3: Proxy/Stub Generator
+    note as ProxyStubGeneratorNote
+        **Proxy/Stub Generator Component**
+        Code Generation (Reflection-based), Marshaling Layer, Method Dispatch
+    end note
+    class ServiceProxy <<concrete>> {
+        - transport_: ITransport*
+        - serializer_: ISerializer*
+        - serviceId_: string
+        - interfaceName_: string
+        - timeout_: chrono::milliseconds
+        ..
+        + ServiceProxy(transport: ITransport*, serviceId: string)
+        + invoke(methodName: string, args: vector<any>) : any
+        - marshalCall(methodName: string, args: vector<any>) : Message
+        - unmarshalResponse(msg: Message) : any
+    }
+
+    class ServiceStub <<concrete>> {
+        - transport_: ITransport*
+        - serializer_: ISerializer*
+        - registry_: ServiceRegistry*
+        - running_: atomic<bool>
+        - dispatchThread_: thread
+        ..
+        + ServiceStub(transport: ITransport*, registry: ServiceRegistry*)
+        + ~ServiceStub()
+        + start() : void
+        + stop() : void
+        - processRequest(msg: Message) : void
+        - dispatchMethod(service: void*, methodName: string, args: vector<any>) : any
+        - marshalResponse(result: any) : Message
+    }
+
+    class ProxyFactory <<concrete>> {
+        - transports_: map<string, unique_ptr<ITransport>>
+        - serializer_: unique_ptr<ISerializer>
+        ..
+        + createProxy(serviceRef: ServiceReference&) : shared_ptr<ServiceProxy>
+        + createStub(transport: ITransport*) : unique_ptr<ServiceStub>
+        - selectTransport(serviceRef: ServiceReference&) : ITransport*
+    }
+
+    ServiceProxy --> ITransport
+    ServiceProxy --> ISerializer
+    ServiceStub --> ITransport
+    ServiceStub --> ISerializer
+    ProxyFactory --> ServiceProxy
+    ProxyFactory --> ServiceStub
+
+    ' Component 4: Connection Pool
+    note as ConnectionPoolNote
+        **Connection Pool Component**
+        Connection Cache, Max Connections: 100, Reuse Strategy
+    end note
+    class ConnectionPool <<concrete>> {
+        - availableConnections_: queue<unique_ptr<ITransport>>
+        - activeConnections_: set<ITransport*>
+        - mutex_: mutex
+        - maxConnections_: size_t {100}
+        - endpointMap_: map<string, queue<unique_ptr<ITransport>>>
+        ..
+        + acquire(endpoint: string) : unique_ptr<ITransport>
+        + release(conn: unique_ptr<ITransport>) : void
+        + getActiveCount() : size_t
+        + getAvailableCount() : size_t
+        - createConnection(endpoint: string) : unique_ptr<ITransport>
+    }
+
+    class ConnectionManager <<concrete>> {
+        - pool_: unique_ptr<ConnectionPool>
+        - healthChecker_: unique_ptr<HealthChecker>
+        - metrics_: ConnectionMetrics
+        ..
+        + getConnection(endpoint: string) : unique_ptr<ITransport>
+        + releaseConnection(conn: unique_ptr<ITransport>) : void
+        + getMetrics() : ConnectionMetrics&
+        - checkHealth(conn: ITransport*) : bool
+    }
+
+    class HealthChecker <<concrete>> {
+        - checkInterval_: chrono::seconds {30}
+        - running_: atomic<bool>
+        - checkThread_: thread
+        ..
+        + start() : void
+        + stop() : void
+        + check(conn: ITransport*) : bool
+        - performCheck(conn: ITransport*) : bool
+    }
+
+    ConnectionManager *-- ConnectionPool
+    ConnectionManager *-- HealthChecker
+    ConnectionPool --> ITransport
+
+    ' Reliability support classes
+    class RetryPolicy <<concrete>> {
+        - maxRetries_: int {3}
+        - initialDelay_: chrono::milliseconds {100}
+        - backoffMultiplier_: double {2.0}
+        - maxDelay_: chrono::milliseconds {30000}
+        ..
+        + executeWithRetry(func: function<T()>) : T
+        + shouldRetry(attempt: int, error: exception&) : bool
+        - calculateDelay(attempt: int) : chrono::milliseconds
+    }
+
+    class CircuitBreaker <<concrete>> {
+        - state_: atomic<CircuitBreakerState>
+        - failureCount_: atomic<int>
+        - failureThreshold_: int {5}
+        - timeout_: chrono::seconds {30}
+        - openedAt_: atomic<time_point>
+        - successThreshold_: int {2}
+        ..
+        + execute(func: function<T()>) : T
+        + getState() : CircuitBreakerState
+        + reset() : void
+        - transitionToOpen() : void
+        - transitionToHalfOpen() : void
+        - transitionToClosed() : void
+    }
+
+    enum CircuitBreakerState {
+        CLOSED
+        OPEN
+        HALF_OPEN
+    }
+
+    CircuitBreaker *-- CircuitBreakerState
+    ConnectionManager --> RetryPolicy
+    ConnectionManager --> CircuitBreaker
+}
+
+' Security Subsystem Classes
+package "Security Subsystem" #Pink {
+    class PermissionManager <<concrete>> {
+        - modulePermissions_: map<Module*, vector<Permission>>
+        - mutex_: shared_mutex
+        ..
+        + checkPermission(module: Module*, permission: Permission&) : bool
+        + grantPermission(module: Module*, permission: Permission&) : void
+        + revokePermission(module: Module*, permission: Permission&) : void
+        + getPermissions(module: Module*) : vector<Permission>
+    }
+
+    class Permission <<concrete>> {
+        - type_: PermissionType
+        - resource_: string
+        - action_: string
+        ..
+        + Permission(type: PermissionType, resource: string, action: string)
+        + implies(other: Permission&) : bool
+        + getType() : PermissionType
+        + getResource() : string
+        + getAction() : string
+    }
+
+    enum PermissionType {
+        SERVICE_ACCESS
+        FILE_READ
+        FILE_WRITE
+        NETWORK_CONNECT
+        NETWORK_LISTEN
+        EXECUTE
+        LOAD_MODULE
+    }
+
+    class CodeVerifier <<concrete>> {
+        - trustStore_: unique_ptr<TrustStore>
+        - certValidator_: unique_ptr<CertificateValidator>
+        ..
+        + verifyModule(modulePath: string) : bool
+        + verifySignature(data: vector<uint8_t>, signature: vector<uint8_t>) : bool
+        - computeHash(data: vector<uint8_t>) : vector<uint8_t>
+        - validateCertificateChain(cert: X509Certificate&) : bool
+    }
+
+    class SandboxManager <<concrete>> {
+        - profiles_: map<Module*, SandboxProfile>
+        ..
+        + applySandbox(module: Module*, policy: SandboxPolicy&) : void
+        + removeSandbox(module: Module*) : void
+        - applySeccompFilter(profile: SandboxProfile&) : void
+        - applyAppArmorProfile(profile: SandboxProfile&) : void
+    }
+
+    class ResourceLimiter <<concrete>> {
+        - limits_: map<pid_t, ResourceLimits>
+        ..
+        + applyLimits(pid: pid_t, limits: ResourceLimits&) : void
+        + removeLimits(pid: pid_t) : void
+        + getLimits(pid: pid_t) : ResourceLimits
+        - createCgroup(pid: pid_t) : void
+        - setCPULimit(pid: pid_t, percent: int) : void
+        - setMemoryLimit(pid: pid_t, bytes: size_t) : void
+    }
+
+    PermissionManager *-- Permission
+    Permission *-- PermissionType
+    PermissionManager --> Module
+    PermissionManager --> CodeVerifier : uses
+    PermissionManager --> SandboxManager : uses
+    PermissionManager --> ResourceLimiter : uses
+}
+
+
+' Cross-package relationships
+FrameworkImpl --> ModuleRegistry : manages
+FrameworkImpl --> ServiceRegistry : uses
+FrameworkImpl --> DependencyResolver : uses
+FrameworkImpl --> ModuleLoader : uses
+FrameworkImpl --> ConfigurationAdmin : uses
+FrameworkImpl --> LogService : uses
+FrameworkImpl --> EventAdmin : uses
+ModuleRegistry --> Module : stores
+ModuleLoader --> PermissionManager : verifies
+ModuleLoader --> CodeVerifier : uses
+ModuleLoader --> PlatformAbstraction : uses loader
+FrameworkImpl --> SandboxManager : applies sandbox
+FrameworkImpl --> ResourceLimiter : applies limits
+ModuleImpl --> IModuleActivator : delegates to
+ModuleImpl --> IModuleContext : provides
+DependencyResolver --> VersionManager : uses
+ServiceRegistry --> Module : tracks owner
+ServiceProxyFactory --> ITransport : uses
+ServiceProxyFactory --> ISerializer : uses
+ProxyFactory --> ITransport : creates
+ServiceStub --> ServiceRegistry : looks up
+ConnectionPool --> ITransport : manages
+ConfigurationAdmin --> ServiceRegistry : registers
+LogService --> ServiceRegistry : registers
+SecurityService --> ServiceRegistry : registers
+EventAdmin --> ServiceRegistry : registers
+SecurityService --> PermissionManager : delegates
+EventAdmin --> EventDispatcher : uses
+
+@enduml

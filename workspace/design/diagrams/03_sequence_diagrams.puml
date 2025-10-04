@@ -1,0 +1,692 @@
+@startuml CDMF_Sequence_Diagrams
+
+title CDMF Sequence Diagrams - Detailed Workflows
+
+' Framework Initialization Sequence
+@startuml Framework_Initialization_Detailed
+title Framework Initialization - Complete Sequence
+
+participant "Main" as MAIN
+participant "FrameworkFactory" as FACTORY
+participant "FrameworkImpl" as FW
+participant "ConfigAdmin" as CFG
+participant "SecurityManager" as SEC
+participant "ServiceRegistry" as SREG
+participant "ModuleRegistry" as MREG
+participant "EventDispatcher" as EDISP
+participant "DependencyResolver" as DRES
+participant "ProcessManager" as PROC
+participant "FrameworkContext" as CTX
+
+MAIN -> FACTORY: createFramework(props)
+activate FACTORY
+FACTORY -> FW: new FrameworkImpl(props)
+activate FW
+FW -> FW: state_ = CREATED
+FW --> FACTORY: framework
+deactivate FW
+FACTORY --> MAIN: framework
+deactivate FACTORY
+
+MAIN -> FW: init()
+activate FW
+
+FW -> CFG: new ConfigurationAdmin(props)
+activate CFG
+CFG -> CFG: loadConfiguration()
+CFG -> CFG: parseConfigFiles()
+CFG --> FW: config loaded
+deactivate CFG
+
+alt Security Enabled
+    FW -> SEC: new SecurityManager(props)
+    activate SEC
+    SEC -> SEC: loadTrustStore()
+    SEC -> SEC: loadCertificates()
+    SEC --> FW: initialized
+    deactivate SEC
+end
+
+FW -> SREG: new ServiceRegistry()
+activate SREG
+SREG -> SREG: nextServiceId_ = 0
+SREG --> FW: initialized
+deactivate SREG
+
+FW -> MREG: new ModuleRegistry(this)
+activate MREG
+MREG --> FW: initialized
+deactivate MREG
+
+FW -> EDISP: new EventDispatcher(threadPoolSize)
+activate EDISP
+EDISP -> EDISP: createThreadPool(8)
+EDISP -> EDISP: start()
+EDISP --> FW: initialized
+deactivate EDISP
+
+FW -> DRES: new DependencyResolver(moduleRegistry)
+activate DRES
+DRES --> FW: initialized
+deactivate DRES
+
+alt IPC Enabled
+    FW -> PROC: new ProcessManager(props)
+    activate PROC
+    PROC -> PROC: initialize()
+    PROC --> FW: initialized
+    deactivate PROC
+end
+
+FW -> CTX: new FrameworkContext(this, serviceRegistry, moduleRegistry)
+activate CTX
+CTX --> FW: context created
+deactivate CTX
+
+FW -> FW: state_ = STARTING
+FW --> MAIN: initialization complete
+deactivate FW
+
+note right of FW
+  Total initialization time: ~50-100ms
+  - Config: 5-10ms
+  - Security: 10-20ms
+  - Registries: 1-2ms
+  - Event Dispatcher: 5-10ms
+  - IPC: 10-20ms (if enabled)
+end note
+
+@enduml
+
+' Module Installation Sequence
+@startuml Module_Installation_Detailed
+title Module Installation - Complete Workflow
+
+actor "Admin" as ADMIN
+participant "FrameworkImpl" as FW
+participant "SecurityManager" as SEC
+participant "ModuleLoader" as LOADER
+participant "PlatformLoader" as PLAT
+participant "ModuleRegistry" as MREG
+participant "DependencyResolver" as DRES
+participant "ModuleImpl" as MOD
+participant "EventDispatcher" as EDISP
+
+ADMIN -> FW: installModule("/path/to/module.so")
+activate FW
+
+alt Security Verification
+    FW -> SEC: verifySignature("/path/to/module.so")
+    activate SEC
+    SEC -> SEC: readFile("/path/to/module.so")
+    SEC -> SEC: readSignature("/path/to/module.so.sig")
+    SEC -> SEC: SHA256(fileContent)
+    SEC -> SEC: RSA_verify(hash, signature, publicKey)
+    SEC -> SEC: verifyCertificateChain()
+    alt Verification Failed
+        SEC --> FW: throw SecurityException
+        FW --> ADMIN: error: signature invalid
+    end
+    SEC --> FW: verified
+    deactivate SEC
+end
+
+FW -> LOADER: load("/path/to/module.so")
+activate LOADER
+
+LOADER -> PLAT: loadLibrary("/path/to/module.so")
+activate PLAT
+alt Linux
+    PLAT -> PLAT: dlopen(path, RTLD_LAZY | RTLD_LOCAL)
+else Windows
+    PLAT -> PLAT: LoadLibraryEx(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH)
+end
+alt Load Failed
+    PLAT --> LOADER: null handle
+    LOADER --> FW: throw ModuleException("Failed to load")
+    FW --> ADMIN: error: cannot load module
+end
+PLAT --> LOADER: handle
+deactivate PLAT
+
+LOADER -> PLAT: getSymbol(handle, "createModuleActivator")
+activate PLAT
+PLAT --> LOADER: function pointer
+deactivate PLAT
+
+LOADER -> PLAT: getSymbol(handle, "destroyModuleActivator")
+activate PLAT
+PLAT --> LOADER: function pointer
+deactivate PLAT
+
+LOADER -> LOADER: parseManifest(path)
+LOADER -> LOADER: validateManifest(manifest)
+alt Invalid Manifest
+    LOADER --> FW: throw ModuleException("Invalid manifest")
+    FW --> ADMIN: error: invalid manifest
+end
+
+LOADER -> LOADER: moduleHandle = new ModuleHandle(...)
+LOADER --> FW: moduleHandle
+deactivate LOADER
+
+FW -> MOD: new ModuleImpl(moduleHandle, manifest, this)
+activate MOD
+MOD -> MOD: moduleId_ = generateId()
+MOD -> MOD: state_ = INSTALLED
+MOD --> FW: module
+deactivate MOD
+
+FW -> MREG: registerModule(module)
+activate MREG
+
+alt Module Already Exists
+    MREG -> MREG: check versionMap_
+    MREG --> FW: throw ModuleException("Already installed")
+    FW --> ADMIN: error: module already installed
+end
+
+MREG -> MREG: modules_[symbolicName] = move(module)
+MREG -> MREG: versionMap_[symbolicName][version] = module
+MREG --> FW: registered
+deactivate MREG
+
+FW -> DRES: resolve(module)
+activate DRES
+DRES -> DRES: parseDependencies(manifest)
+loop For each dependency
+    DRES -> MREG: getModule(depName, versionRange)
+    activate MREG
+    alt Dependency Not Found
+        MREG --> DRES: null
+        alt Optional Dependency
+            DRES -> DRES: log warning
+        else Required Dependency
+            DRES --> FW: return false
+            FW --> ADMIN: error: unresolved dependencies
+        end
+    end
+    MREG --> DRES: depModule
+    deactivate MREG
+    DRES -> MREG: addDependency(module, depModule)
+end
+DRES -> MOD: transitionTo(RESOLVED)
+DRES --> FW: resolved
+deactivate DRES
+
+FW -> EDISP: fireEvent(MODULE_INSTALLED)
+activate EDISP
+EDISP -> EDISP: enqueue event
+EDISP --> FW: queued
+deactivate EDISP
+
+alt Auto-Start Enabled
+    FW -> MOD: start()
+    activate MOD
+    note right: See Module Start Sequence
+    MOD --> FW: ACTIVE
+    deactivate MOD
+end
+
+FW --> ADMIN: module installed successfully
+deactivate FW
+
+note right of FW
+  Total time: 1-10ms
+  - Verification: 5-10ms (if enabled)
+  - Loading: 1-2ms
+  - Resolution: <1ms
+end note
+
+@enduml
+
+' Module Start Sequence
+@startuml Module_Start_Detailed
+title Module Start - Complete Lifecycle
+
+participant "Framework" as FW
+participant "ModuleImpl" as MOD
+participant "DependencyResolver" as DRES
+participant "ModuleActivator" as ACT
+participant "ModuleContext" as CTX
+participant "ServiceRegistry" as SREG
+participant "EventDispatcher" as EDISP
+
+FW -> MOD: start()
+activate MOD
+
+alt State Check
+    MOD -> MOD: check state
+    alt State != RESOLVED
+        MOD --> FW: throw ModuleException("Must be RESOLVED")
+    end
+end
+
+MOD -> MOD: transitionTo(STARTING)
+MOD -> EDISP: fireEvent(MODULE_STARTING)
+
+alt Activator Not Created
+    MOD -> MOD: createActivator()
+    activate MOD
+    MOD -> MOD: createFn = handle->getCreateFunction()
+    MOD -> MOD: activator_ = createFn()
+    deactivate MOD
+end
+
+alt Context Not Created
+    MOD -> CTX: new ModuleContext(this, framework)
+    activate CTX
+    CTX --> MOD: context
+    deactivate CTX
+end
+
+MOD -> ACT: start(context)
+activate ACT
+
+note right of ACT
+  Module-specific initialization:
+  - Load resources
+  - Initialize state
+  - Register services
+  - Set up event listeners
+end note
+
+' Example activator operations
+ACT -> CTX: getService<ILogger>("logger")
+activate CTX
+CTX -> SREG: getServiceReference("ILogger")
+activate SREG
+SREG --> CTX: serviceRef
+deactivate SREG
+CTX -> SREG: getService(serviceRef)
+activate SREG
+SREG --> CTX: service
+deactivate SREG
+CTX --> ACT: logger
+deactivate CTX
+
+ACT -> ACT: initialize module resources
+
+ACT -> CTX: registerService("IDataProcessor", processor, props)
+activate CTX
+CTX -> SREG: registerService(...)
+activate SREG
+SREG -> SREG: serviceEntry = create ServiceEntry
+SREG -> SREG: services_["IDataProcessor"].push_back(entry)
+SREG -> SREG: sort by ranking
+SREG -> EDISP: fireEvent(SERVICE_REGISTERED)
+SREG --> CTX: ServiceRegistration
+deactivate SREG
+CTX --> ACT: registration
+deactivate CTX
+
+ACT -> CTX: addEventListener(listener, filter)
+activate CTX
+CTX -> EDISP: addEventListener(listener, filter)
+deactivate CTX
+
+ACT --> MOD: started
+deactivate ACT
+
+MOD -> MOD: transitionTo(ACTIVE)
+MOD -> EDISP: fireEvent(MODULE_STARTED)
+
+MOD --> FW: state = ACTIVE
+deactivate MOD
+
+note right of MOD
+  Start time: 1-100ms
+  - Fast: 1-5ms (simple modules)
+  - Medium: 5-50ms (resource loading)
+  - Slow: 50-100ms (complex init)
+end note
+
+@enduml
+
+' Service Call Sequence (In-Process)
+@startuml Service_Call_InProcess_Detailed
+title In-Process Service Call - Ultra-Fast Path
+
+participant "Client Code" as CLIENT
+participant "ModuleContext" as CTX
+participant "ServiceRegistry" as SREG
+participant "ServiceImpl" as IMPL
+
+CLIENT -> CTX: getService<ILogger>("logger")
+activate CTX
+note right: ~5ns total for cached
+
+CTX -> CTX: check cache
+alt Cache Hit
+    CTX --> CLIENT: ILogger* (from cache)
+    note right: Cache hit: 2-3ns
+else Cache Miss
+    CTX -> SREG: getServiceReference("logger")
+    activate SREG
+
+    SREG -> SREG: it = services_.find("logger")
+    note right: Hash map lookup: O(1), ~20ns
+
+    SREG -> SREG: entry = it->second.front()
+    note right: Vector access: O(1), ~5ns
+
+    SREG --> CTX: ServiceReference(entry)
+    deactivate SREG
+    note right: Total lookup: ~25-30ns
+
+    CTX -> CTX: cache[interfaceName] = serviceRef
+    CTX -> CTX: service = (ILogger*)entry.serviceObject
+    CTX --> CLIENT: ILogger*
+end
+deactivate CTX
+
+note right of CLIENT
+  Cached access: 2-3ns
+  Uncached access: 25-30ns
+  Amortized: 5-10ns
+end note
+
+CLIENT -> IMPL: log("message")
+activate IMPL
+note right: Direct vtable call: ~2-5ns
+
+IMPL -> IMPL: processLog("message")
+IMPL -> IMPL: writeToFile(...)
+IMPL --> CLIENT: void
+deactivate IMPL
+
+note over CLIENT, IMPL
+  **Performance Breakdown:**
+  - Service lookup (cached): 2-3ns
+  - Virtual function call: 2-5ns
+  - Total overhead: 4-8ns
+  - Implementation time: varies
+
+  **Assembly:**
+  mov rax, [rdi]        ; Load vtable (2 cycles)
+  mov rax, [rax+0x10]   ; Load function ptr (2 cycles)
+  jmp rax               ; Call (1 cycle)
+end note
+
+@enduml
+
+' Service Call Sequence (Out-of-Process)
+@startuml Service_Call_OutOfProcess_Detailed
+title Out-of-Process Service Call - IPC Path
+
+participant "Client" as CLIENT
+participant "ModuleContext" as CTX
+participant "ServiceRegistry" as SREG
+participant "ServiceProxy" as PROXY
+participant "ITransport\n(Unix Socket)" as TRANSP
+participant "ServiceStub" as STUB
+participant "ServiceImpl" as IMPL
+
+CLIENT -> CTX: getService<ILogger>("logger")
+activate CTX
+
+CTX -> SREG: getServiceReference("logger")
+activate SREG
+SREG -> SREG: lookup service
+SREG -> SREG: check location = OUT_OF_PROCESS
+SREG --> CTX: ServiceReference(location: OUT_OF_PROCESS)
+deactivate SREG
+
+CTX -> CTX: proxyFactory.createProxy(serviceRef)
+CTX -> PROXY: new ServiceProxy(transport, serviceId)
+activate PROXY
+deactivate PROXY
+
+CTX --> CLIENT: ILogger* (actually proxy)
+deactivate CTX
+
+note right of CLIENT: Client sees normal interface
+
+CLIENT -> PROXY: log("message")
+activate PROXY
+
+PROXY -> PROXY: marshal arguments
+activate PROXY
+note right: Serialize: 5-10μs
+PROXY -> PROXY: ServiceCall call
+PROXY -> PROXY: call.set_interface_name("ILogger")
+PROXY -> PROXY: call.set_method_name("log")
+PROXY -> PROXY: arg = call.add_arguments()
+PROXY -> PROXY: arg->set_value("message")
+PROXY -> PROXY: serialized = call.SerializeToString()
+deactivate PROXY
+
+PROXY -> PROXY: Message msg(SERVICE_CALL, serialized)
+PROXY -> PROXY: msg.setRequestId(generateId())
+
+PROXY -> TRANSP: send(msg)
+activate TRANSP
+note right: IPC send: 30-60μs
+TRANSP -> TRANSP: socket.write(msg.serialize())
+TRANSP ->> STUB: [IPC transfer]
+deactivate TRANSP
+
+activate STUB
+STUB -> STUB: msg = receive()
+note right: IPC receive: 30-60μs
+
+STUB -> STUB: unmarshal call
+activate STUB
+note right: Deserialize: 5-10μs
+STUB -> STUB: ServiceCall call
+STUB -> STUB: call.ParseFromString(msg.payload)
+STUB -> STUB: interfaceName = call.interface_name()
+STUB -> STUB: methodName = call.method_name()
+STUB -> STUB: args = call.arguments()
+deactivate STUB
+
+STUB -> SREG: getServiceReference(interfaceName)
+activate SREG
+SREG --> STUB: serviceRef
+deactivate SREG
+
+STUB -> SREG: getService(serviceRef)
+activate SREG
+SREG --> STUB: service (ILogger*)
+deactivate SREG
+
+STUB -> IMPL: log(args[0].value())
+activate IMPL
+note right: Actual service call: <1μs
+IMPL -> IMPL: processLog("message")
+IMPL --> STUB: void
+deactivate IMPL
+
+STUB -> STUB: marshal response
+activate STUB
+note right: Serialize: 5-10μs
+STUB -> STUB: ServiceResponse response
+STUB -> STUB: response.set_success(true)
+STUB -> STUB: serialized = response.SerializeToString()
+deactivate STUB
+
+STUB -> STUB: Message respMsg(SERVICE_RESPONSE, serialized)
+STUB -> TRANSP: send(respMsg)
+deactivate STUB
+
+activate TRANSP
+note right: IPC send: 30-60μs
+TRANSP ->> PROXY: [IPC transfer]
+TRANSP --> PROXY: respMsg
+deactivate TRANSP
+
+PROXY -> PROXY: unmarshal response
+activate PROXY
+note right: Deserialize: 5-10μs
+PROXY -> PROXY: ServiceResponse response
+PROXY -> PROXY: response.ParseFromString(respMsg.payload)
+alt Response Error
+    PROXY -> PROXY: throw RemoteException(response.error_message())
+end
+deactivate PROXY
+
+PROXY --> CLIENT: void
+deactivate PROXY
+
+note over CLIENT, IMPL
+  **Performance Breakdown:**
+  - Marshal call: 5-10μs
+  - IPC send: 30-60μs
+  - Unmarshal call: 5-10μs
+  - Service execution: <1μs
+  - Marshal response: 5-10μs
+  - IPC receive: 30-60μs
+  - Unmarshal response: 5-10μs
+  **Total: 80-150μs**
+
+  **Optimization: Batching**
+  100 calls batched: 100μs + 100×1μs = 200μs
+  Per call: 2μs (40x improvement)
+end note
+
+@enduml
+
+' Hot-Swapping Sequence
+@startuml Module_HotSwap_Detailed
+title Module Hot-Swapping - Zero-Downtime Update
+
+participant "Admin" as ADMIN
+participant "Framework" as FW
+participant "ModuleHotSwapper" as SWAP
+participant "Old Module\n(v1.0.0)" as OLD
+participant "New Module\n(v1.1.0)" as NEW
+participant "ServiceRegistry" as SREG
+participant "Active Clients" as CLIENTS
+
+ADMIN -> FW: updateModule(oldModule, "/path/to/v1.1.0.so")
+activate FW
+
+FW -> SWAP: updateModule(oldModule, newPath)
+activate SWAP
+
+SWAP -> FW: installModule(newPath)
+activate FW
+note right: See Module Installation
+FW --> SWAP: newModule
+deactivate FW
+
+SWAP -> SWAP: validateCompatibility(old, new)
+activate SWAP
+SWAP -> SWAP: check symbolicName matches
+SWAP -> SWAP: check version.isCompatibleWith()
+alt Incompatible
+    SWAP --> FW: throw IncompatibilityException
+    FW --> ADMIN: error: incompatible versions
+end
+deactivate SWAP
+
+SWAP -> NEW: resolve()
+note right: Prepare but don't start yet
+
+alt Module Supports State Migration
+    SWAP -> OLD: captureState()
+    activate OLD
+    OLD -> OLD: state = module->captureState()
+    OLD --> SWAP: stateJson
+    deactivate OLD
+end
+
+SWAP -> NEW: start()
+activate NEW
+note right: New version starting
+NEW --> SWAP: ACTIVE
+deactivate NEW
+
+SWAP -> SWAP: transferServices(old, new)
+activate SWAP
+
+loop For each old service
+    SWAP -> OLD: getRegisteredServices()
+    activate OLD
+    OLD --> SWAP: serviceRegistrations[]
+    deactivate OLD
+
+    SWAP -> NEW: findService(interfaceName)
+    activate NEW
+    NEW --> SWAP: newService
+    deactivate NEW
+
+    alt Service Found in New Version
+        SWAP -> SREG: replaceService(oldReg, newService)
+        activate SREG
+        note right: **Atomic swap**
+        SREG -> SREG: lock(mutex_)
+        SREG -> SREG: oldEntry = find(oldReg.serviceId)
+        SREG -> SREG: oldEntry.serviceObject = newService
+        SREG -> SREG: oldEntry.owningModule = newModule
+        SREG -> SREG: unlock(mutex_)
+        note right: Clients now see new service
+        SREG --> SWAP: replaced
+        deactivate SREG
+    end
+end
+deactivate SWAP
+
+note over CLIENTS
+  **Active clients during swap:**
+  - In-flight calls complete on old version
+  - New calls route to new version
+  - No call failures
+  - No downtime
+end note
+
+alt State Migration Supported
+    SWAP -> NEW: restoreState(stateJson)
+    activate NEW
+    NEW -> NEW: module->restoreState(state)
+    NEW --> SWAP: restored
+    deactivate NEW
+end
+
+SWAP -> SWAP: drainRequests(oldModule)
+activate SWAP
+loop While useCount > 0
+    SWAP -> SWAP: wait 10ms
+    SWAP -> OLD: getServiceUseCount()
+    activate OLD
+    OLD --> SWAP: useCount
+    deactivate OLD
+    alt Timeout (5 seconds)
+        SWAP -> SWAP: log warning, force continue
+        SWAP -> SWAP: break
+    end
+end
+note right: Wait for in-flight requests
+deactivate SWAP
+
+SWAP -> OLD: stop()
+activate OLD
+note right: Old version stopping
+OLD --> SWAP: RESOLVED
+deactivate OLD
+
+SWAP -> FW: uninstallModule(oldModule)
+activate FW
+FW --> SWAP: uninstalled
+deactivate FW
+
+SWAP --> FW: update complete
+deactivate SWAP
+
+FW --> ADMIN: module updated: v1.0.0 → v1.1.0
+deactivate FW
+
+note over ADMIN, CLIENTS
+  **Hot-Swap Timeline:**
+  - Install new: 1-10ms
+  - Start new: 1-100ms
+  - Transfer services: <1ms (atomic)
+  - Drain requests: 0-5000ms
+  - Stop old: 1-50ms
+  **Total: 3-5150ms**
+  **Downtime: 0ms** (atomic service swap)
+end note
+
+@enduml
+
+@enduml

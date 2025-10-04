@@ -1,0 +1,584 @@
+@startuml CDMF_System_Architecture_Detailed
+
+title CDMF System Architecture - Detailed View
+
+skinparam componentStyle rectangle
+skinparam defaultTextAlignment center
+
+package "Application Layer" #LightBlue {
+    component [User Module 1] as UM1
+    component [User Module 2] as UM2
+    component [Business Logic Modules] as BLM
+    component [Extension Modules] as EXT
+}
+
+package "Framework Services Layer" #LightGreen {
+    component [Configuration Service] as CFG
+    component [Logging Service] as LOG
+    component [Security Service] as SEC
+    component [Event Management] as EVT
+}
+
+package "Service Layer" #LightYellow {
+    component [Service Registry] as SREG
+
+    component [Service Tracker] as STRK
+
+    component [Service Proxy Factory] as SPRX
+}
+
+package "Module Management Layer" #LightCoral {
+    component [Module Registry] as MREG
+    component [Module Loader] as MLOAD
+    component [Dependency Resolver] as DRES
+    component [Version Manager] as VMAN
+}
+
+package "IPC Infrastructure Layer" #Lavender {
+    component [Transport Manager] as TMGR
+    component [Serialization Engine] as SER
+    component [Proxy/Stub Generator] as PSG
+    component [Connection Pool] as CPOOL
+}
+
+package "Security Subsystem" #Pink {
+    component [Code Verifier] as CVER
+    component [Sandbox Manager] as SAND
+    component [Permission Manager] as PERM
+    component [Resource Limiter] as RLIM
+}
+
+package "Framework Core" #Orange {
+    component [Framework Manager] as FWMGR
+    component [Platform Abstraction] as PLAT
+    component [Event Dispatcher] as EDISP
+}
+
+' Connections - Application to Services
+UM1 --> SREG : lookup services
+UM2 --> SREG : lookup services
+BLM --> SREG : lookup services
+EXT --> SREG : lookup services
+
+UM1 --> EVT : fire events
+UM2 --> EVT : fire events
+
+' Connections - Framework Services
+CFG --> SREG : register
+LOG --> SREG : register
+SEC --> SREG : register
+EVT --> SREG : register
+
+' Connections - Service Layer
+SREG --> EDISP : notify service events
+STRK --> SREG : track services
+SPRX --> TMGR : create IPC proxies
+
+' Connections - Module Management
+FWMGR --> MREG : manage modules
+FWMGR --> MLOAD : load modules
+MREG --> DRES : resolve dependencies
+MREG --> VMAN : check versions
+MLOAD --> CVER : verify signatures
+MLOAD --> PLAT : platform loading
+
+' Connections - IPC Layer
+TMGR --> SER : serialize/deserialize
+PSG --> TMGR : use transports
+CPOOL --> TMGR : pool connections
+
+' Connections - Security
+FWMGR --> CVER : verify modules
+FWMGR --> SAND : apply sandbox
+SREG --> PERM : check permissions
+SAND --> RLIM : apply resource limits
+
+' Connections - Event System
+FWMGR --> EDISP : coordinate events
+SREG --> EDISP : service events
+MREG --> EDISP : module events
+
+note right of SREG
+  **Performance:**
+  - Lookup: O(1) interface, O(n) filter
+  - Registration: O(log n) for sorting
+  - Thread-safe: shared_mutex
+  - Caching: optional reference cache
+end note
+
+note right of TMGR
+  **Transport Latency:**
+  - Unix Socket: 50-100 μs
+  - Shared Memory: 10-20 μs
+  - gRPC: 1-10 ms
+
+  **Throughput:**
+  - Unix Socket: 1 GB/s
+  - Shared Memory: 10 GB/s
+  - gRPC: 100 MB/s
+end note
+
+note right of DRES
+  **Algorithms:**
+  - Start Order: Kahn's topological sort
+  - Cycle Detection: DFS with recursion stack
+  - Complexity: O(V + E)
+end note
+
+note right of CVER
+  **Security:**
+  - Algorithm: RSA-4096 with SHA-256
+  - Certificate: X.509 chain validation
+  - Trust Store: Root CA certificates
+  - Validation: Signature + expiry check
+end note
+
+@enduml
+
+@startuml CDMF_Layered_Architecture_Detailed
+
+title CDMF Layered Architecture - Component Details
+
+skinparam backgroundColor #FEFEFE
+skinparam component {
+    BackgroundColor<<layer1>> #FFE6E6
+    BackgroundColor<<layer2>> #E6F3FF
+    BackgroundColor<<layer3>> #E6FFE6
+    BackgroundColor<<layer4>> #FFF9E6
+    BackgroundColor<<layer5>> #F0E6FF
+}
+
+package "Layer 5: Application Layer" <<layer5>> {
+    [Module A\n- Activator: start/stop\n- Services: IDataProcessor\n- Dependencies: ILogger]
+    [Module B\n- Activator: start/stop\n- Services: IAnalyzer\n- Dependencies: IDatabase]
+    [Module C\n- Activator: start/stop\n- Services: IReporter\n- Dependencies: ILogger, IDatabase]
+}
+
+package "Layer 4: Service Abstraction Layer" <<layer4>> {
+    component "Service Registry" as L4_SREG {
+        [ServiceEntry]
+        serviceId: uint64_t
+        interfaceName: string
+        serviceObject: void*
+        owningModule: Module*
+        ranking: int
+        useCount: atomic<int>
+        --
+        [Operations]
+        + registerService()
+        + unregisterService()
+        + getServiceReference()
+        + getService()
+    }
+
+    component "Service Tracker" as L4_STRK {
+        [TrackedServices]
+        map<ServiceRef, shared_ptr<T>>
+        --
+        [Callbacks]
+        onServiceAdded
+        onServiceModified
+        onServiceRemoved
+        --
+        [Operations]
+        + open()
+        + close()
+        + getService()
+    }
+}
+
+package "Layer 3: Module Management Layer" <<layer3>> {
+    component "Module Registry" as L3_MREG {
+        [Storage]
+        modules_: map<string, unique_ptr<Module>>
+        versionMap_: map<string, map<Version, Module*>>
+        dependencies_: map<Module*, set<Module*>>
+        --
+        [Operations]
+        + registerModule(unique_ptr<Module>)
+        + getModule(name, version)
+        + addDependency(Module*, Module*)
+    }
+
+    component "Module" as L3_MOD {
+        [State]
+        moduleId_: uint64_t
+        symbolicName_: string
+        version_: Version
+        state_: atomic<ModuleState>
+        --
+        [Components]
+        handle_: unique_ptr<ModuleHandle>
+        activator_: unique_ptr<IModuleActivator>
+        context_: unique_ptr<ModuleContext>
+        --
+        [Lifecycle]
+        + start()
+        + stop()
+        + update(string)
+        + uninstall()
+    }
+
+    component "Dependency Resolver" as L3_DRES {
+        [Graph]
+        dependencies: map<Module*, set<Module*>>
+        dependents: map<Module*, set<Module*>>
+        --
+        [Algorithms]
+        + getStartOrder() // Kahn's algorithm
+        + getStopOrder() // Reverse of start
+        + hasCycle() // DFS
+        + findCycles()
+    }
+}
+
+package "Layer 2: Communication Layer" <<layer2>> {
+    component "IPC Transport" as L2_IPC {
+        [Unix Socket]
+        - socket_: int
+        - epoll_: int
+        - latency: 50-100μs
+        --
+        [Shared Memory]
+        - shmAddr_: void*
+        - ringBuffer_: RingBuffer*
+        - latency: 10-20μs
+        --
+        [gRPC]
+        - channel_: shared_ptr<Channel>
+        - stub_: unique_ptr<Stub>
+        - latency: 1-10ms
+        --
+        [Operations]
+        + send(Message)
+        + receive(timeout)
+        + connect(endpoint)
+    }
+
+    component "Proxy/Stub" as L2_PS {
+        [Proxy]
+        - transport_: ITransport*
+        - serviceId_: string
+        --
+        Methods (auto-generated):
+        + method1(args...) {
+            marshal(args)
+            send()
+            wait_response()
+            unmarshal(result)
+        }
+        --
+        [Stub]
+        - registry_: ServiceRegistry*
+        --
+        + dispatch(call) {
+            lookup_service()
+            invoke_method()
+            marshal_result()
+            send_response()
+        }
+    }
+
+    component "Serialization" as L2_SER {
+        [Protocol Buffers]
+        - Fast: ~1-5μs per message
+        - Size: Compact
+        - Schema: Required
+        --
+        [FlatBuffers]
+        - Fast: Zero-copy
+        - Size: Larger
+        - Schema: Required
+        --
+        [Operations]
+        + serialize(object) -> bytes
+        + deserialize(bytes) -> object
+    }
+}
+
+package "Layer 1: Platform Layer" <<layer1>> {
+    component "Dynamic Loading" as L1_DL {
+        [Linux]
+        dlopen(path, RTLD_LAZY)
+        dlsym(handle, symbol)
+        dlclose(handle)
+        --
+        [Windows]
+        LoadLibraryEx(path, ...)
+        GetProcAddress(handle, symbol)
+        FreeLibrary(handle)
+        --
+        [macOS]
+        dlopen(path, RTLD_LAZY)
+        dlsym(handle, symbol)
+        dlclose(handle)
+    }
+
+    component "Threading" as L1_THR {
+        [Thread Pool]
+        - workers_: vector<thread>
+        - tasks_: BlockingQueue<Task>
+        - numThreads_: size_t (8 default)
+        --
+        [Operations]
+        + enqueue(Task)
+        + wait()
+        + shutdown()
+        --
+        [Synchronization]
+        mutex, condition_variable
+        shared_mutex (reader-writer)
+        atomic<T>
+    }
+
+    component "Platform Abstractions" as L1_PLAT {
+        [File System]
+        - path operations
+        - directory iteration
+        - file I/O
+        --
+        [Process]
+        - fork/CreateProcess
+        - exec/CreateProcess
+        - wait/WaitForSingleObject
+        --
+        [IPC Primitives]
+        - pipes, sockets
+        - shared memory
+        - semaphores
+    }
+}
+
+' Layer connections
+[Module A] --> L4_SREG
+[Module B] --> L4_SREG
+[Module C] --> L4_SREG
+
+L4_SREG --> L3_MREG
+L4_STRK --> L4_SREG
+
+L3_MREG --> L3_MOD
+L3_MREG --> L3_DRES
+L3_MOD --> L2_IPC : out-of-process
+
+L2_IPC --> L2_PS
+L2_IPC --> L2_SER
+L2_PS --> L2_SER
+
+L3_MOD --> L1_DL : load
+L2_IPC --> L1_THR : async I/O
+L2_IPC --> L1_PLAT : system calls
+
+note as N1
+  **Data Flow:**
+  Module → Service Registry → Module Context
+  → Service Proxy → IPC → Remote Stub
+  → Service Implementation
+end note
+
+note as N2
+  **Performance Critical Path:**
+  In-Process: Module → Registry → Service (5-10 ns)
+  Out-of-Process: Module → Proxy → IPC → Stub → Service (50-100 μs)
+end note
+
+@enduml
+
+@startuml CDMF_Deployment_Models_Detailed
+
+title CDMF Deployment Models - Detailed Comparison
+
+' In-Process Deployment
+package "In-Process Deployment" {
+    node "Process: Application (PID 1000)" {
+        component [Framework Core] as IP_FW
+        component [Module A] as IP_MA
+        component [Module B] as IP_MB
+        component [Module C] as IP_MC
+        component [Service Registry\n(in-memory)] as IP_SR
+
+        database "Shared Heap\n(4GB Address Space)" as IP_HEAP
+
+        IP_MA -down-> IP_SR : register
+        IP_MB -down-> IP_SR : register
+        IP_MC -down-> IP_SR : register
+        IP_FW -down-> IP_SR : manage
+
+        IP_MA -down-> IP_HEAP : allocate
+        IP_MB -down-> IP_HEAP : allocate
+        IP_MC -down-> IP_HEAP : allocate
+    }
+
+    note right of IP_MA
+        **Performance:**
+        - Latency: 5-10 ns
+        - Throughput: 10M+ calls/s
+        - Memory: Shared
+
+        **Isolation:**
+        - None
+        - Crash affects all
+
+        **Use Case:**
+        - Trusted modules
+        - Maximum performance
+    end note
+}
+
+' Out-of-Process Deployment
+package "Out-of-Process Deployment" {
+    node "Main Process (PID 2000)" {
+        component [Framework Core] as OP_FW
+        component [Module A\n(Trusted)] as OP_MA
+        component [Service Registry] as OP_SR
+        component [IPC Proxy Manager] as OP_IPM
+
+        OP_MA -down-> OP_SR
+        OP_FW -down-> OP_SR
+        OP_SR -down-> OP_IPM
+    }
+
+    node "Module Process 1 (PID 2001)\nSandbox: seccomp + AppArmor\nLimits: 256MB RAM, 25% CPU" {
+        component [Module B\n(Untrusted)] as OP_MB
+        component [IPC Stub 1] as OP_IPC1
+
+        OP_MB -down-> OP_IPC1
+    }
+
+    node "Module Process 2 (PID 2002)\nSandbox: seccomp + AppArmor\nLimits: 512MB RAM, 50% CPU" {
+        component [Module C\n(Third-party)] as OP_MC
+        component [IPC Stub 2] as OP_IPC2
+
+        OP_MC -down-> OP_IPC2
+    }
+
+    OP_IPM <--> OP_IPC1 : Unix Socket\n/tmp/cdmf_2001.sock\n50-100μs latency
+    OP_IPM <--> OP_IPC2 : Shared Memory\n/dev/shm/cdmf_2002\n10-20μs latency
+
+    note right of OP_MB
+        **Performance:**
+        - Latency: 50-100 μs
+        - Throughput: 10K-20K calls/s
+
+        **Isolation:**
+        - Process-level
+        - Crash isolated
+        - Sandboxed
+
+        **Security:**
+        - seccomp syscall filter
+        - AppArmor file access
+        - Resource limits
+    end note
+}
+
+' Remote Deployment
+package "Remote Deployment" {
+    node "Machine A: Main Application\n192.168.1.10" {
+        component [Framework Core] as RM_FW
+        component [gRPC Client] as RM_GC
+
+        RM_FW -down-> RM_GC
+    }
+
+    cloud "Network\ngRPC/HTTP2\nTLS 1.3" as RM_NET {
+        note as RM_NOTE
+            **Network Security:**
+            - TLS 1.3 encryption
+            - mTLS authentication
+            - Load balancing
+        end note
+    }
+
+    node "Machine B: ML Service\n192.168.1.20\n4x GPU (V100)" {
+        component [gRPC Server] as RM_GS1
+        component [ML Module\n(TensorFlow)] as RM_ML
+
+        RM_GS1 -down-> RM_ML
+    }
+
+    node "Machine C: Analytics Service\n192.168.1.21\n64GB RAM" {
+        component [gRPC Server] as RM_GS2
+        component [Analytics Module\n(Spark)] as RM_AN
+
+        RM_GS2 -down-> RM_AN
+    }
+
+    RM_GC <--> RM_NET : requests
+    RM_NET <--> RM_GS1 : 1-10ms latency
+    RM_NET <--> RM_GS2 : 1-10ms latency
+
+    note right of RM_ML
+        **Performance:**
+        - Latency: 1-10 ms
+        - Throughput: 100-1K calls/s
+
+        **Scalability:**
+        - Horizontal scaling
+        - Load balancing
+        - Geographic distribution
+
+        **Use Case:**
+        - Specialized hardware
+        - High availability
+        - Microservices
+    end note
+}
+
+' Hybrid Deployment
+package "Hybrid Deployment (Production)" {
+    node "Main Process (PID 3000)" {
+        component [Core\n(in-process)] as HY_CORE
+        component [Logger\n(in-process)] as HY_LOG
+        component [Config\n(in-process)] as HY_CFG
+        component [Business Logic\n(in-process)] as HY_BL
+        component [Service Registry] as HY_SR
+        component [IPC Manager] as HY_IPM
+
+        HY_CORE --> HY_SR
+        HY_LOG --> HY_SR
+        HY_CFG --> HY_SR
+        HY_BL --> HY_SR
+        HY_SR --> HY_IPM
+    }
+
+    node "Plugin A Process\n(PID 3001, sandboxed)" {
+        component [Plugin A] as HY_PA
+        HY_PA : Third-party
+        HY_PA : 256MB limit
+    }
+
+    node "Analytics Process\n(PID 3002)" {
+        component [Analytics] as HY_AN
+        HY_AN : Resource intensive
+        HY_AN : 2GB limit
+    }
+
+    cloud "Network" as HY_NET
+
+    node "ML Cluster\n(GPU farm)" {
+        component [ML Service] as HY_ML
+        HY_ML : Distributed
+        HY_ML : Auto-scaling
+    }
+
+    HY_IPM <--> HY_PA : Unix Socket\n50-100μs
+    HY_IPM <--> HY_AN : Shared Memory\n10-20μs
+    HY_IPM <--> HY_NET : gRPC
+    HY_NET <--> HY_ML : 1-10ms
+
+    note bottom of HY_SR
+        **Hybrid Benefits:**
+        - Performance: Fast path for core (5-10ns)
+        - Isolation: Untrusted code sandboxed
+        - Flexibility: Per-module deployment
+        - Scalability: Remote for heavy workloads
+
+        **Policy-Based:**
+        - com.company.core.* → in-process
+        - com.thirdparty.* → out-of-process + sandbox
+        - com.company.ml.* → remote
+    end note
+}
+
+@enduml

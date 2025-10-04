@@ -1,0 +1,241 @@
+# Build directories
+build/
+build-*/
+cmake-build-*/
+out/
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+Makefile
+*.cmake
+
+# Compiled object files
+*.o
+*.obj
+*.lo
+*.slo
+
+# Precompiled headers
+*.gch
+*.pch
+
+# Compiled dynamic libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Compiled static libraries
+*.a
+*.lib
+*.lai
+*.la
+
+# Executables
+*.exe
+*.out
+*.app
+bin/
+!tests/
+
+# Coverage files
+*.gcda
+*.gcno
+*.gcov
+coverage/
+coverage.info
+coverage_html/
+lcov.info
+
+# Profiling
+*.prof
+gmon.out
+callgrind.out.*
+
+# Valgrind
+*.memcheck
+*.helgrind
+*.drd
+vgcore.*
+
+# Sanitizer outputs
+*.asan
+*.tsan
+*.ubsan
+
+# IDE specific files
+# Visual Studio Code
+.vscode/
+*.code-workspace
+.history/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# CLion / IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse
+.cproject
+.project
+.settings/
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+
+# Qt Creator
+*.user
+*.autosave
+CMakeLists.txt.user*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.*.sw?
+Session.vim
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+
+# Tags
+TAGS
+tags
+.tags
+.tags_sorted_by_file
+
+# System files
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# Linux
+.directory
+.Trash-*
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.cache
+*.log
+*.pid
+
+# Package files
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
+*.rar
+
+# Core dumps
+core.*
+*.core
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Python (if used for build scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.Python
+venv/
+env/
+ENV/
+
+# Documentation build
+docs/_build/
+docs/html/
+docs/latex/
+doxygen/
+*.doctree
+
+# Test results
+Testing/
+test_results/
+*.xml
+gtest_*.xml
+
+# Performance benchmarks
+benchmark_results/
+*.perf
+
+# Install directories (local installs)
+install/
+prefix/
+
+# Dependency directories
+_deps/
+external/
+third_party/
+!third_party/.gitkeep
+
+# Generated source files
+*_generated.h
+*_generated.cpp
+*.pb.h
+*.pb.cc
+*.grpc.pb.h
+*.grpc.pb.cc
+
+# Keep specific files/directories
+!.gitignore
+!CMakeLists.txt
+!*.sh
+!*.bat
+!*.md
+
+# AI communication (optional - uncomment to ignore)
+# ai-comm/
+# Keep coordination files but ignore logs
+ai-comm/logs/
+ai-comm/validation/
+
+# Release artifacts (optional - uncomment to track releases)
+# workspace/release/
+
+# Keep empty directories
+!**/.gitkeep
+
+ai-comm/

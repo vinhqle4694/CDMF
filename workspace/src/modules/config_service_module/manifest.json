@@ -1,0 +1,32 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.config.service",
+    "name": "Configuration Service Module",
+    "version": "1.0.0",
+    "library": "config_service_module.so",
+    "description": "Provides configuration management services for CDMF applications",
+    "vendor": "CDMF Project",
+    "category": "framework-service"
+  },
+
+  "dependencies": [],
+
+  "exports": [
+    {
+      "interface": "cdmf::IConfigurationAdmin",
+      "version": "1.0.0"
+    }
+  ],
+
+  "activator": {
+    "class": "cdmf::modules::ConfigServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {
+    "config.storage.dir": "/workspace/build/config/store",
+    "config.auto.reload": "true",
+    "config.persistence.enabled": "true"
+  }
+}

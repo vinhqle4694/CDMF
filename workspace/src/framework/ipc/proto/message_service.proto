@@ -1,0 +1,104 @@
+/**
+ * @file message_service.proto
+ * @brief gRPC service definition for IPC message transport
+ *
+ * Defines the bidirectional streaming RPC service for message exchange
+ * between processes using gRPC transport.
+ *
+ * @version 1.0.0
+ * @date 2025-10-03
+ */
+
+syntax = "proto3";
+
+package cdmf.ipc.grpc;
+
+// Wire format for message transmission
+message MessageProto {
+  // Message header (56 bytes in binary format)
+  bytes header = 1;
+
+  // Message payload (variable size)
+  bytes payload = 2;
+
+  // Optional metadata
+  map<string, string> metadata = 3;
+
+  // Message timestamp (microseconds since epoch)
+  uint64 timestamp = 4;
+
+  // Message ID (128-bit UUID as bytes)
+  bytes message_id = 5;
+
+  // Correlation ID (for request-response matching)
+  bytes correlation_id = 6;
+}
+
+// Health check request
+message HealthCheckRequest {
+  string service = 1;
+}
+
+// Health check response
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+    SERVICE_UNKNOWN = 3;
+  }
+  ServingStatus status = 1;
+}
+
+// Message streaming service
+service MessageService {
+  // Bidirectional streaming RPC for message exchange
+  rpc StreamMessages(stream MessageProto) returns (stream MessageProto);
+
+  // Unary RPC for single message send
+  rpc SendMessage(MessageProto) returns (MessageProto);
+
+  // Server streaming for subscription
+  rpc Subscribe(MessageProto) returns (stream MessageProto);
+
+  // Health check
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// Connection information
+message ConnectionInfo {
+  string client_id = 1;
+  string server_address = 2;
+  uint64 connected_at = 3;
+  map<string, string> properties = 4;
+}
+
+// Statistics message
+message TransportStats {
+  uint64 messages_sent = 1;
+  uint64 messages_received = 2;
+  uint64 bytes_sent = 3;
+  uint64 bytes_received = 4;
+  uint64 send_errors = 5;
+  uint64 recv_errors = 6;
+  uint32 active_connections = 7;
+}
+
+// Control message for transport management
+message ControlMessage {
+  enum ControlType {
+    UNKNOWN = 0;
+    CONNECT = 1;
+    DISCONNECT = 2;
+    PING = 3;
+    PONG = 4;
+    SHUTDOWN = 5;
+    STATS_REQUEST = 6;
+    STATS_RESPONSE = 7;
+  }
+
+  ControlType type = 1;
+  ConnectionInfo connection_info = 2;
+  TransportStats stats = 3;
+  map<string, string> properties = 4;
+}
