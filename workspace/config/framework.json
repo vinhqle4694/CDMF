@@ -9,7 +9,8 @@
     "lib_path": "/workspace/build/lib",
     "auto_install_path": "/workspace/build/modules/auto",
     "storage_dir": "/workspace/build/config/store",
-    "auto_reload": true
+    "auto_reload": true,
+    "auto_start": true
   },
   "security": {
     "enabled": true,

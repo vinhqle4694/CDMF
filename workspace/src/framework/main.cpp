@@ -145,11 +145,12 @@ cdmf::FrameworkProperties loadFrameworkConfig(const std::string& configPath) {
             if (logging.contains("syslog_enabled")) props.set("framework.log.syslog.enabled", logging["syslog_enabled"].get<bool>() ? "true" : "false");
         }
 
-        // Load module configuration settings (storage_dir and auto_reload)
+        // Load module configuration settings (storage_dir, auto_reload, and auto_start)
         if (config.contains("modules")) {
             auto& modules = config["modules"];
             if (modules.contains("storage_dir")) props.set("framework.modules.storage.dir", modules["storage_dir"].get<std::string>());
             if (modules.contains("auto_reload")) props.set("framework.modules.auto.reload", modules["auto_reload"].get<bool>() ? "true" : "false");
+            if (modules.contains("auto_start")) props.set("framework.modules.auto.start", modules["auto_start"].get<bool>() ? "true" : "false");
         }
 
         LOGI_FMT("Loaded framework configuration from: " << configPath);
@@ -166,7 +167,7 @@ cdmf::FrameworkProperties loadFrameworkConfig(const std::string& configPath) {
  */
 cdmf::FrameworkProperties setupFrameworkProperties() {
     // Try to load from config file, fall back to defaults if not found
-    const char* configPath = std::getenv("CDMF_CONFIG");
+    const char* configPath = std::getenv("CDMF_FRAMEWORK_CONFIG");
     std::string configFile = configPath ? configPath : "./config/framework.json";
 
     return loadFrameworkConfig(configFile);
@@ -347,14 +348,13 @@ bool installApplicationModules(cdmf::Framework* framework) {
             }
 
             // Install the module with explicit config/manifest path
+            // Note: Framework handles auto-start based on framework.modules.auto.start property
+            // and per-module manifest.autoStart setting
             auto module = framework->installModule(libraryPath, configPath);
             if (module) {
                 LOGI_FMT("    Module installed: " << module->getSymbolicName()
-                         << " v" << module->getVersion().toString());
-
-                // Start the module
-                module->start();
-                LOGI_FMT("    Module started: " << module->getSymbolicName());
+                         << " v" << module->getVersion().toString()
+                         << " [state: " << static_cast<int>(module->getState()) << "]");
                 successCount++;
             } else {
                 LOGW("    Failed to install module");

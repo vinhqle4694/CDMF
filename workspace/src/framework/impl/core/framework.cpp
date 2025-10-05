@@ -411,6 +411,20 @@ public:
                 }
             }
 
+            // Auto-start module if enabled (both globally and in manifest)
+            bool globalAutoStart = properties_.getBool("framework.modules.auto.start", true);
+            if (globalAutoStart && manifest.autoStart && modulePtr->getState() == ModuleState::RESOLVED) {
+                try {
+                    LOGI_FMT("  Auto-starting module (auto-start enabled in manifest)");
+                    modulePtr->start();
+                    LOGI("  Module auto-started successfully");
+                } catch (const std::exception& e) {
+                    LOGW_FMT("  Failed to auto-start module: " << e.what());
+                    LOGW("  Module installed but not started");
+                    // Don't fail installation if auto-start fails
+                }
+            }
+
             // Fire module installed event
             fireFrameworkEvent(FrameworkEventType::MODULE_INSTALLED, modulePtr, "Module installed");
 
@@ -528,6 +542,20 @@ public:
                 } else {
                     LOGW_FMT("  Module has unsatisfied dependencies: " << missingDeps);
                     LOGW("  Module remains in INSTALLED state until dependencies are resolved");
+                }
+            }
+
+            // Auto-start module if enabled (both globally and in manifest)
+            bool globalAutoStart = properties_.getBool("framework.modules.auto.start", true);
+            if (globalAutoStart && manifest.autoStart && modulePtr->getState() == ModuleState::RESOLVED) {
+                try {
+                    LOGI_FMT("  Auto-starting module (auto-start enabled in manifest)");
+                    modulePtr->start();
+                    LOGI("  Module auto-started successfully");
+                } catch (const std::exception& e) {
+                    LOGW_FMT("  Failed to auto-start module: " << e.what());
+                    LOGW("  Module installed but not started");
+                    // Don't fail installation if auto-start fails
                 }
             }
 

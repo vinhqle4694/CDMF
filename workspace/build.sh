@@ -39,6 +39,7 @@ print_info() {
 # Parse arguments
 CLEAN=0
 RUN_TESTS=1
+RUN_CDMF=0
 ENABLE_COVERAGE=0
 ENABLE_SANITIZERS=0
 SHARED_LIBS=ON
@@ -51,6 +52,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --no-tests)
+            RUN_TESTS=0
+            shift
+            ;;
+        --run)
+            RUN_CDMF=1
             RUN_TESTS=0
             shift
             ;;
@@ -90,6 +96,7 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --clean                Remove build directory before building"
             echo "  --no-tests             Skip running tests"
+            echo "  --run                  Run CDMF executable only (skip build and tests)"
             echo "  --coverage             Enable code coverage (implies --debug)"
             echo "  --sanitizers           Enable sanitizers (implies --debug)"
             echo "  --static               Build static libraries"
@@ -108,54 +115,60 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Clean build directory if requested
-if [ $CLEAN -eq 1 ]; then
-    print_info "Cleaning build directory..."
-    rm -rf "$BUILD_DIR"
-    print_success "Build directory cleaned"
+# Skip build if only running
+if [ $RUN_CDMF -eq 1 ]; then
+    print_info "Skipping build (--run only mode)"
+    cd "$BUILD_DIR"
+else
+    # Clean build directory if requested
+    if [ $CLEAN -eq 1 ]; then
+        print_info "Cleaning build directory..."
+        rm -rf "$BUILD_DIR"
+        print_success "Build directory cleaned"
+    fi
+
+    # Create build directory
+    print_info "Creating build directory: $BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
+
+    # Configure
+    print_header "Configuring CDMF PHASE_1"
+    print_info "Build type: $BUILD_TYPE"
+    print_info "Parallel jobs: $NUM_JOBS"
+    print_info "Shared libraries: $SHARED_LIBS"
+
+    CMAKE_ARGS=(
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+        -DCDMF_BUILD_SHARED_LIBS="$SHARED_LIBS"
+        -DCDMF_BUILD_TESTS=ON
+    )
+
+    if [ $ENABLE_COVERAGE -eq 1 ]; then
+        print_info "Code coverage: ENABLED"
+        CMAKE_ARGS+=(-DCDMF_ENABLE_COVERAGE=ON)
+    fi
+
+    if [ $ENABLE_SANITIZERS -eq 1 ]; then
+        print_info "Sanitizers: ENABLED"
+        CMAKE_ARGS+=(-DCDMF_ENABLE_SANITIZERS=ON)
+    fi
+
+    cmake .. "${CMAKE_ARGS[@]}"
+    print_success "Configuration complete"
+
+    # Build
+    print_header "Building CDMF PHASE_1"
+    cmake --build . -j"$NUM_JOBS"
+    print_success "Build complete"
+
+    # List built libraries
+    print_header "Built Libraries"
+    ls -lh lib/ 2>/dev/null || true
+
+    print_header "Built Test Executables"
+    ls -lh bin/ 2>/dev/null || true
 fi
-
-# Create build directory
-print_info "Creating build directory: $BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-cd "$BUILD_DIR"
-
-# Configure
-print_header "Configuring CDMF PHASE_1"
-print_info "Build type: $BUILD_TYPE"
-print_info "Parallel jobs: $NUM_JOBS"
-print_info "Shared libraries: $SHARED_LIBS"
-
-CMAKE_ARGS=(
-    -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-    -DCDMF_BUILD_SHARED_LIBS="$SHARED_LIBS"
-    -DCDMF_BUILD_TESTS=ON
-)
-
-if [ $ENABLE_COVERAGE -eq 1 ]; then
-    print_info "Code coverage: ENABLED"
-    CMAKE_ARGS+=(-DCDMF_ENABLE_COVERAGE=ON)
-fi
-
-if [ $ENABLE_SANITIZERS -eq 1 ]; then
-    print_info "Sanitizers: ENABLED"
-    CMAKE_ARGS+=(-DCDMF_ENABLE_SANITIZERS=ON)
-fi
-
-cmake .. "${CMAKE_ARGS[@]}"
-print_success "Configuration complete"
-
-# Build
-print_header "Building CDMF PHASE_1"
-cmake --build . -j"$NUM_JOBS"
-print_success "Build complete"
-
-# List built libraries
-print_header "Built Libraries"
-ls -lh lib/ 2>/dev/null || true
-
-print_header "Built Test Executables"
-ls -lh bin/ 2>/dev/null || true
 
 # Run tests
 if [ $RUN_TESTS -eq 1 ]; then
@@ -200,16 +213,36 @@ if [ $ENABLE_COVERAGE -eq 1 ]; then
     fi
 fi
 
-# Summary
-print_header "Build Summary"
-echo -e "${GREEN}✓ Build successful${NC}"
-echo -e "  Build directory: $(pwd)"
-echo -e "  Libraries: lib/"
-echo -e "  Test executables: bin/"
+# Run CDMF executable
+if [ $RUN_CDMF -eq 1 ]; then
+    print_header "Running CDMF"
 
-if [ $RUN_TESTS -eq 1 ]; then
-    echo -e "${GREEN}✓ All tests passed${NC}"
+    # Set environment variable for framework config
+    export CDMF_FRAMEWORK_CONFIG="$(pwd)/config/framework.json"
+    print_info "CDMF_FRAMEWORK_CONFIG=$CDMF_FRAMEWORK_CONFIG"
+
+    # Check if executable exists
+    if [ -f "bin/cdmf" ]; then
+        cd ..
+        ./build/bin/cdmf
+    else
+        print_error "CDMF executable not found at bin/cdmf"
+        exit 1
+    fi
 fi
 
-echo "Install libraries:"
-echo "  sudo cmake --install . --prefix /usr/local"
+# Summary
+if [ $RUN_CDMF -eq 0 ]; then
+    print_header "Build Summary"
+    echo -e "${GREEN}✓ Build successful${NC}"
+    echo -e "  Build directory: $(pwd)"
+    echo -e "  Libraries: lib/"
+    echo -e "  Test executables: bin/"
+
+    if [ $RUN_TESTS -eq 1 ]; then
+        echo -e "${GREEN}✓ All tests passed${NC}"
+    fi
+
+    echo "Install libraries:"
+    echo "  sudo cmake --install . --prefix /usr/local"
+fi
