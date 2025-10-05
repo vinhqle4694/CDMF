@@ -100,7 +100,7 @@ uint32_t readString(const uint8_t* data, uint32_t size, std::string& str) {
 SerializationResult BinarySerializer::serialize(const Message& message) {
     try {
         const MessageHeader& header = message.getHeader();
-        LOGD_FMT("BinarySerializer::serialize - payload_size: " << header.payload_size
+        LOGV_FMT("BinarySerializer::serialize - payload_size: " << header.payload_size
                  << ", checksum: " << header.checksum
                  << ", type: " << static_cast<int>(header.type));
 
@@ -133,7 +133,7 @@ SerializationResult BinarySerializer::serialize(const Message& message) {
             data.insert(data.end(), error_data.begin(), error_data.end());
         }
 
-        LOGD_FMT("BinarySerializer::serialize complete - total_size: " << data.size());
+        LOGV_FMT("BinarySerializer::serialize complete - total_size: " << data.size());
         return SerializationResult(std::move(data));
 
     } catch (const std::exception& e) {
@@ -147,7 +147,7 @@ SerializationResult BinarySerializer::serialize(const Message& message) {
 
 DeserializationResult BinarySerializer::deserialize(const void* data, uint32_t size) {
     try {
-        LOGD_FMT("BinarySerializer::deserialize - data_size: " << size);
+        LOGV_FMT("BinarySerializer::deserialize - data_size: " << size);
         const uint8_t* bytes = static_cast<const uint8_t*>(data);
         uint32_t offset = 0;
 
@@ -166,7 +166,7 @@ DeserializationResult BinarySerializer::deserialize(const void* data, uint32_t s
         std::memcpy(&header, bytes, sizeof(MessageHeader));
         offset += sizeof(MessageHeader);
 
-        LOGD_FMT("BinarySerializer::deserialize - header deserialized - payload_size: "
+        LOGV_FMT("BinarySerializer::deserialize - header deserialized - payload_size: "
                  << header.payload_size << ", checksum: " << header.checksum
                  << ", type: " << static_cast<int>(header.type));
 
@@ -243,7 +243,7 @@ DeserializationResult BinarySerializer::deserialize(const void* data, uint32_t s
                                           "Message checksum verification failed");
         }
 
-        LOGD_FMT("BinarySerializer::deserialize complete - message valid");
+        LOGV_FMT("BinarySerializer::deserialize complete - message valid");
         return DeserializationResult(message);
 
     } catch (const std::exception& e) {

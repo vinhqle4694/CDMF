@@ -19,15 +19,15 @@ namespace cdmf {
 namespace ipc {
 
 SerializerPtr SerializerFactory::createSerializer(SerializationFormat format) {
-    LOGD_FMT("SerializerFactory::createSerializer - format: " << static_cast<int>(format));
+    LOGV_FMT("SerializerFactory::createSerializer - format: " << static_cast<int>(format));
 
     switch (format) {
         case SerializationFormat::BINARY:
-            LOGD_FMT("Creating BinarySerializer");
+            LOGV_FMT("Creating BinarySerializer");
             return std::make_shared<BinarySerializer>();
 
         case SerializationFormat::PROTOBUF:
-            LOGD_FMT("Creating ProtoBufSerializer");
+            LOGV_FMT("Creating ProtoBufSerializer");
             return std::make_shared<ProtoBufSerializer>();
 
         case SerializationFormat::JSON:

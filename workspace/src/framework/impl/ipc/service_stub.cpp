@@ -71,6 +71,14 @@ bool ServiceStub::start() {
         return false;
     }
 
+    // Connect transport to enable message exchange
+    LOGD_FMT("Connecting transport");
+    auto connect_result = transport_->connect();
+    if (!connect_result.success()) {
+        LOGE_FMT("Transport connect failed: " << connect_result.error_message);
+        return false;
+    }
+
     // Set up message callback for async message reception
     transport_->setMessageCallback([this](MessagePtr message) {
         if (message && message->getType() == MessageType::REQUEST) {
@@ -331,7 +339,7 @@ void ServiceStub::handleRequest(MessagePtr message) {
 Message ServiceStub::dispatchRequest(const Message& message) {
     auto method_name = message.getSubject();
 
-    LOGD_FMT("Dispatching request to method: " << method_name);
+    LOGV_FMT("Dispatching request to method: " << method_name);
 
     // Find method handler
     MethodHandler handler;
@@ -352,7 +360,7 @@ Message ServiceStub::dispatchRequest(const Message& message) {
     // Extract request data
     std::vector<uint8_t> request_data;
     auto payload_size = message.getPayloadSize();
-    LOGD_FMT("Request payload size: " << payload_size);
+    LOGV_FMT("Request payload size: " << payload_size);
     if (payload_size > 0) {
         request_data.resize(payload_size);
         ::memcpy(request_data.data(), message.getPayload(), payload_size);
@@ -443,7 +451,7 @@ void ServiceStub::sendResponse(const Message& response) {
         oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(corr_id[i]);
     }
 
-    LOGD_FMT("Sending response - correlation_id: " << oss.str()
+    LOGV_FMT("Sending response - correlation_id: " << oss.str()
              << ", size: " << response.getTotalSize()
              << ", checksum: " << response.getHeader().checksum
              << ", is_error: " << response.isError());
@@ -452,7 +460,7 @@ void ServiceStub::sendResponse(const Message& response) {
 
     if (send_result.success()) {
         stats_.bytes_sent += response.getTotalSize();
-        LOGD_FMT("Response sent successfully");
+        LOGV_FMT("Response sent successfully");
     } else {
         LOGE_FMT("Failed to send response: " << send_result.error_message);
     }

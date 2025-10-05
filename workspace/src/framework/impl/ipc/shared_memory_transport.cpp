@@ -98,6 +98,10 @@ TransportResult<bool> SharedMemoryTransport::start() {
         return {TransportError::NOT_INITIALIZED, false, "Transport not initialized"};
     }
 
+    // Set ownership based on configuration (not on who actually creates the memory)
+    // This ensures correct TX/RX ring assignment for bidirectional communication
+    is_owner_ = shm_config_.create_shm;
+
     // Create or open shared memory
     TransportResult<bool> result;
     if (shm_config_.create_shm) {
@@ -244,8 +248,6 @@ bool SharedMemoryTransport::isConnected() const {
 }
 
 TransportResult<bool> SharedMemoryTransport::send(const Message& message) {
-    LOGD_FMT("SharedMemoryTransport::send - message type: " << static_cast<int>(message.getType())
-             << ", size: " << message.getTotalSize());
     if (!connected_) {
         LOGE_FMT("SharedMemoryTransport::send failed - not connected");
         return {TransportError::NOT_CONNECTED, false, "Not connected"};
@@ -284,9 +286,7 @@ TransportResult<bool> SharedMemoryTransport::send(const Message& message) {
                      reinterpret_cast<uint8_t*>(envelope),
                      ShmMessageEnvelope::HEADER_SIZE + result.data.size());
 
-    if (push_result.success()) {
-        LOGD_FMT("SharedMemoryTransport::send completed successfully, size: " << result.data.size());
-    } else {
+    if (!push_result.success()) {
         LOGE_FMT("SharedMemoryTransport::send failed - ring buffer push failed");
     }
     return push_result;
@@ -297,36 +297,31 @@ TransportResult<bool> SharedMemoryTransport::send(Message&& message) {
 }
 
 TransportResult<MessagePtr> SharedMemoryTransport::receive(int32_t timeout_ms) {
-    LOGD_FMT("SharedMemoryTransport::receive - timeout: " << timeout_ms << "ms");
     if (!connected_) {
         LOGE_FMT("SharedMemoryTransport::receive failed - not connected");
         return {TransportError::NOT_CONNECTED, nullptr, "Not connected"};
     }
 
-    auto result = popFromRing(rx_ring_, rx_sem_, timeout_ms);
-    if (result.success()) {
-        LOGD_FMT("SharedMemoryTransport::receive completed successfully");
-    }
-    return result;
+    return popFromRing(rx_ring_, rx_sem_, timeout_ms);
 }
 
 TransportResult<MessagePtr> SharedMemoryTransport::tryReceive() {
-    LOGD_FMT("SharedMemoryTransport::tryReceive (non-blocking)");
+    LOGV_FMT("SharedMemoryTransport::tryReceive (non-blocking)");
     return receive(0);
 }
 
 void SharedMemoryTransport::setMessageCallback(MessageCallback callback) {
-    LOGD_FMT("Setting message callback");
+    LOGV_FMT("Setting message callback");
     message_callback_ = callback;
 }
 
 void SharedMemoryTransport::setErrorCallback(ErrorCallback callback) {
-    LOGD_FMT("Setting error callback");
+    LOGV_FMT("Setting error callback");
     error_callback_ = callback;
 }
 
 void SharedMemoryTransport::setStateChangeCallback(StateChangeCallback callback) {
-    LOGD_FMT("Setting state change callback");
+    LOGV_FMT("Setting state change callback");
     state_callback_ = callback;
 }
 
@@ -388,8 +383,21 @@ TransportResult<bool> SharedMemoryTransport::createSharedMemory() {
             // Already exists, try to open it
             shm_fd_ = shm_open(shm_config_.shm_name.c_str(), O_RDWR, 0666);
             if (shm_fd_ >= 0) {
-                is_owner_ = false;
-                LOGD_FMT("Opened existing shared memory successfully");
+                // Note: is_owner_ is already set based on config in start()
+
+                // Get the size of existing shared memory
+                struct stat st;
+                if (fstat(shm_fd_, &st) < 0) {
+                    std::string error_msg = std::string("Failed to get existing shared memory size: ") + strerror(errno);
+                    LOGE_FMT(error_msg);
+                    close(shm_fd_);
+                    shm_fd_ = -1;
+                    setError(TransportError::CONNECTION_FAILED, error_msg);
+                    return {TransportError::CONNECTION_FAILED, false, last_error_msg_};
+                }
+
+                shm_size_ = st.st_size;
+                LOGD_FMT("Opened existing shared memory successfully, fd: " << shm_fd_ << ", size: " << shm_size_);
                 return {TransportError::SUCCESS, true, ""};
             }
         }
@@ -399,13 +407,14 @@ TransportResult<bool> SharedMemoryTransport::createSharedMemory() {
         return {TransportError::CONNECTION_FAILED, false, last_error_msg_};
     }
 
-    is_owner_ = true;
-    LOGD_FMT("Created shared memory as owner");
+    // Note: is_owner_ is already set based on config in start()
+    LOGD_FMT("Created shared memory, fd: " << shm_fd_);
 
     // Set size
+    LOGD_FMT("Setting shared memory size with ftruncate: " << shm_config_.shm_size << " bytes");
     if (ftruncate(shm_fd_, shm_config_.shm_size) < 0) {
         std::string error_msg = std::string("Failed to set shared memory size: ") + strerror(errno);
-        LOGE_FMT(error_msg);
+        LOGE_FMT(error_msg << ", errno: " << errno);
         setError(TransportError::CONNECTION_FAILED, error_msg);
         close(shm_fd_);
         shm_fd_ = -1;
@@ -414,7 +423,7 @@ TransportResult<bool> SharedMemoryTransport::createSharedMemory() {
     }
 
     shm_size_ = shm_config_.shm_size;
-    LOGD_FMT("Shared memory created successfully, size: " << shm_size_);
+    LOGD_FMT("Shared memory created successfully, fd: " << shm_fd_ << ", size: " << shm_size_);
     return {TransportError::SUCCESS, true, ""};
 }
 
@@ -441,14 +450,28 @@ TransportResult<bool> SharedMemoryTransport::openSharedMemory() {
     }
 
     shm_size_ = st.st_size;
-    is_owner_ = false;
+    // Note: is_owner_ is already set based on config in start()
 
     LOGD_FMT("Opened shared memory successfully, size: " << shm_size_);
     return {TransportError::SUCCESS, true, ""};
 }
 
 TransportResult<bool> SharedMemoryTransport::mapSharedMemory() {
-    LOGD_FMT("Mapping shared memory, size: " << shm_size_);
+    // Validate inputs before mmap
+    if (shm_fd_ < 0) {
+        std::string error_msg = "Invalid file descriptor for mmap: " + std::to_string(shm_fd_);
+        LOGE_FMT(error_msg);
+        setError(TransportError::CONNECTION_FAILED, error_msg);
+        return {TransportError::CONNECTION_FAILED, false, error_msg};
+    }
+
+    if (shm_size_ == 0) {
+        std::string error_msg = "Invalid shared memory size: 0";
+        LOGE_FMT(error_msg);
+        setError(TransportError::CONNECTION_FAILED, error_msg);
+        return {TransportError::CONNECTION_FAILED, false, error_msg};
+    }
+
     shm_addr_ = mmap(nullptr, shm_size_, PROT_READ | PROT_WRITE,
                      MAP_SHARED, shm_fd_, 0);
 
@@ -460,7 +483,7 @@ TransportResult<bool> SharedMemoryTransport::mapSharedMemory() {
         return {TransportError::CONNECTION_FAILED, false, last_error_msg_};
     }
 
-    LOGD_FMT("Shared memory mapped successfully at address: " << shm_addr_);
+    LOGD_FMT("Shared memory mapped successfully, size: " << shm_size_);
     return {TransportError::SUCCESS, true, ""};
 }
 
@@ -517,28 +540,46 @@ TransportResult<bool> SharedMemoryTransport::setupRingBuffers() {
     size_t offset = sizeof(ShmControlBlock);
     offset = (offset + 63) & ~63; // Align to 64 bytes
 
-    // TX ring buffer
-    tx_ring_ = reinterpret_cast<ByteRingBuffer*>(
+    // Get pointers to both ring buffers
+    ByteRingBuffer* ring1 = reinterpret_cast<ByteRingBuffer*>(
         static_cast<uint8_t*>(shm_addr_) + offset);
-
-    if (is_owner_) {
-        new (tx_ring_) ByteRingBuffer();
-    }
 
     offset += sizeof(ByteRingBuffer);
     offset = (offset + 63) & ~63;
 
-    // RX ring buffer (if bidirectional)
+    ByteRingBuffer* ring2 = nullptr;
     if (shm_config_.bidirectional) {
-        rx_ring_ = reinterpret_cast<ByteRingBuffer*>(
+        ring2 = reinterpret_cast<ByteRingBuffer*>(
             static_cast<uint8_t*>(shm_addr_) + offset);
+    }
 
+    // Initialize ring buffers (owner only)
+    if (is_owner_) {
+        new (ring1) ByteRingBuffer();
+        if (ring2) {
+            new (ring2) ByteRingBuffer();
+        }
+    }
+
+    // Assign TX/RX based on role
+    if (shm_config_.bidirectional) {
         if (is_owner_) {
-            new (rx_ring_) ByteRingBuffer();
+            // Owner (server): TX = ring1, RX = ring2
+            tx_ring_ = ring1;
+            rx_ring_ = ring2;
+        } else {
+            // Client: TX = ring2, RX = ring1 (swapped for bidirectional communication)
+            tx_ring_ = ring2;
+            rx_ring_ = ring1;
         }
     } else {
-        rx_ring_ = tx_ring_; // Use same ring for receive
+        // Unidirectional: both use same ring
+        tx_ring_ = ring1;
+        rx_ring_ = ring1;
     }
+
+    LOGD_FMT("Ring buffers configured - role: " << (is_owner_ ? "owner" : "client")
+             << ", mode: " << (shm_config_.bidirectional ? "bidirectional" : "unidirectional"));
 
     return {TransportError::SUCCESS, true, ""};
 }
@@ -613,10 +654,25 @@ TransportResult<bool> SharedMemoryTransport::closeSemaphores() {
     return {TransportError::SUCCESS, true, ""};
 }
 
-TransportResult<bool> SharedMemoryTransport::pushToRing(ByteRingBuffer* /* ring */, sem_t* sem,
-                                                         const uint8_t* /* data */, size_t size) {
-    // Note: Simplified implementation - actual ring buffer for byte arrays would be different
-    // This is a placeholder showing the concept
+TransportResult<bool> SharedMemoryTransport::pushToRing(ByteRingBuffer* ring, sem_t* sem,
+                                                         const uint8_t* data, size_t size) {
+    // Simple implementation: allocate message buffer and store pointer in ring
+    // Note: Since producer and consumer are in the same process, heap pointers work
+
+    if (!ring || !data || size == 0) {
+        LOGE_FMT("pushToRing failed - invalid arguments: ring=" << ring << ", data=" << data << ", size=" << size);
+        return {TransportError::INVALID_MESSAGE, false, "Invalid arguments"};
+    }
+
+    // Allocate buffer for message (this works for same-process IPC)
+    uint8_t* msg_buffer = new uint8_t[size];
+    std::memcpy(msg_buffer, data, size);
+
+    // Try to push pointer to ring buffer
+    if (!ring->try_push(msg_buffer)) {
+        delete[] msg_buffer;
+        return {TransportError::BUFFER_OVERFLOW, false, "Ring buffer full"};
+    }
 
     updateStats(true, size, true);
 
@@ -628,9 +684,14 @@ TransportResult<bool> SharedMemoryTransport::pushToRing(ByteRingBuffer* /* ring 
     return {TransportError::SUCCESS, true, ""};
 }
 
-TransportResult<MessagePtr> SharedMemoryTransport::popFromRing(ByteRingBuffer* /* ring */,
+TransportResult<MessagePtr> SharedMemoryTransport::popFromRing(ByteRingBuffer* ring,
                                                                 sem_t* sem,
                                                                 int32_t timeout_ms) {
+    if (!ring) {
+        LOGE_FMT("popFromRing failed - invalid ring buffer");
+        return {TransportError::INVALID_MESSAGE, nullptr, "Invalid ring buffer"};
+    }
+
     // Wait on semaphore if blocking
     if (shm_config_.use_semaphores && sem != SEM_FAILED && timeout_ms != 0) {
         if (timeout_ms < 0) {
@@ -649,14 +710,42 @@ TransportResult<MessagePtr> SharedMemoryTransport::popFromRing(ByteRingBuffer* /
                 if (errno == ETIMEDOUT) {
                     return {TransportError::TIMEOUT, nullptr, "Timeout waiting for message"};
                 }
+                return {TransportError::CONNECTION_FAILED, nullptr, std::string("Semaphore wait failed: ") + strerror(errno)};
             }
         }
     }
 
-    // Note: Simplified - would actually pop from ring buffer here
-    updateStats(false, 0, true);
+    // Try to pop from ring buffer
+    uint8_t* msg_buffer = nullptr;
+    if (!ring->try_pop(msg_buffer)) {
+        return {TransportError::RECV_FAILED, nullptr, "No data available"};
+    }
 
-    return {TransportError::SUCCESS, nullptr, ""};
+    if (!msg_buffer) {
+        LOGE_FMT("popFromRing - null message buffer after successful pop");
+        return {TransportError::RECV_FAILED, nullptr, "Null message buffer"};
+    }
+
+    // Parse the envelope
+    ShmMessageEnvelope* envelope = reinterpret_cast<ShmMessageEnvelope*>(msg_buffer);
+    uint8_t* serialized_data = msg_buffer + ShmMessageEnvelope::HEADER_SIZE;
+    size_t data_size = envelope->size;
+
+    // Deserialize the message
+    auto serializer = SerializerFactory::createSerializer(SerializationFormat::BINARY);
+    auto result = serializer->deserialize(serialized_data, data_size);
+
+    // Free the buffer
+    delete[] msg_buffer;
+
+    if (!result.success) {
+        LOGE_FMT("Failed to deserialize message: " << result.error_message);
+        return {TransportError::SERIALIZATION_ERROR, nullptr, result.error_message};
+    }
+
+    updateStats(false, data_size, true);
+
+    return {TransportError::SUCCESS, result.message, ""};
 }
 
 void SharedMemoryTransport::ioThreadFunc() {

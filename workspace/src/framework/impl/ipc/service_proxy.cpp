@@ -293,7 +293,7 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
     CallResult<std::vector<uint8_t>> result;
     auto start_time = std::chrono::steady_clock::now();
 
-    LOGD_FMT("Calling method: " << method_name << ", size: " << request_size
+    LOGV_FMT("Calling method: " << method_name << ", size: " << request_size
              << ", timeout: " << timeout.count() << "ms, retry: " << retry_count);
 
     if (!isConnected()) {
@@ -314,13 +314,13 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
         request.getMessageId(call_id);
 
         std::string call_id_str = callIdToString(call_id);
-        LOGD_FMT("Created request with call_id: " << call_id_str);
+        LOGV_FMT("Created request with call_id: " << call_id_str);
 
         // Register pending call
         auto pending_call = registerPendingCall(call_id, method_name, timeout);
 
         // Send request
-        LOGD_FMT("Sending request for method: " << method_name);
+        LOGV_FMT("Sending request for method: " << method_name);
         auto send_result = transport_->send(std::move(request));
         if (!send_result.success()) {
             LOGE_FMT("Send failed: " << send_result.error_message);
@@ -344,7 +344,7 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
         }
 
         // Wait for response
-        LOGD_FMT("Waiting for response, timeout: " << timeout.count() << "ms");
+        LOGV_FMT("Waiting for response, timeout: " << timeout.count() << "ms");
         auto future = pending_call->promise.get_future();
         auto status = future.wait_for(timeout);
 
@@ -372,7 +372,7 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
         }
 
         // Get response message
-        LOGD_FMT("Response received for method: " << method_name);
+        LOGV_FMT("Response received for method: " << method_name);
         MessagePtr response;
         try {
             response = future.get();
@@ -401,7 +401,7 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
 
         // Extract response data
         auto response_size = response->getPayloadSize();
-        LOGD_FMT("Response payload size: " << response_size);
+        LOGV_FMT("Response payload size: " << response_size);
         if (response_size > 0) {
             result.data.resize(response_size);
             std::memcpy(result.data.data(), response->getPayload(), response_size);
@@ -409,7 +409,7 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
 
         result.success = true;
         stats_.successful_calls++;
-        LOGI_FMT("Call successful for method: " << method_name << ", response size: " << response_size);
+        LOGV_FMT("Call successful for method: " << method_name << ", response size: " << response_size);
 
     } catch (const std::exception& e) {
         LOGE_FMT("Exception in sendAndReceive: " << e.what());
@@ -427,7 +427,7 @@ CallResult<std::vector<uint8_t>> ServiceProxy::sendAndReceive(
     auto response_time_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
     updateAvgResponseTime(response_time_us);
 
-    LOGD_FMT("Call completed in " << result.duration.count() << "ms");
+    LOGV_FMT("Call completed in " << result.duration.count() << "ms");
     return result;
 }
 
@@ -457,14 +457,14 @@ Message ServiceProxy::createRequest(
     // Update checksum after setting payload
     request.updateChecksum();
 
-    LOGD_FMT("Created request message - ID: " << msg_id
+    LOGV_FMT("Created request message - ID: " << msg_id
              << ", method: " << method_name
              << ", payload_size: " << request_size
              << ", checksum: " << request.getHeader().checksum);
 
     // For one-way calls, set flag
     if (call_type == CallType::ONEWAY) {
-        LOGD_FMT("One-way call (no response expected)");
+        LOGV_FMT("One-way call (no response expected)");
     }
 
     return request;
@@ -498,7 +498,7 @@ std::shared_ptr<PendingCall> ServiceProxy::registerPendingCall(
     std::lock_guard<std::mutex> lock(pending_calls_mutex_);
     pending_calls_[call_id_str] = pending_call;
 
-    LOGD_FMT("Registered pending call - ID: " << call_id_str
+    LOGV_FMT("Registered pending call - ID: " << call_id_str
              << ", method: " << method_name
              << ", timeout: " << timeout.count() << "ms"
              << ", total_pending: " << pending_calls_.size());
@@ -510,7 +510,7 @@ void ServiceProxy::unregisterPendingCall(const uint8_t* call_id) {
     std::string call_id_str = callIdToString(call_id);
     std::lock_guard<std::mutex> lock(pending_calls_mutex_);
     pending_calls_.erase(call_id_str);
-    LOGD_FMT("Unregistered pending call - ID: " << call_id_str
+    LOGV_FMT("Unregistered pending call - ID: " << call_id_str
              << ", remaining: " << pending_calls_.size());
 }
 
@@ -519,7 +519,7 @@ void ServiceProxy::handleResponse(MessagePtr message) {
     message->getCorrelationId(correlation_id);
     std::string corr_id_str = callIdToString(correlation_id);
 
-    LOGD_FMT("Handling response with correlation_id: " << corr_id_str);
+    LOGV_FMT("Handling response with correlation_id: " << corr_id_str);
 
     std::shared_ptr<PendingCall> pending_call;
     {
@@ -528,7 +528,7 @@ void ServiceProxy::handleResponse(MessagePtr message) {
         if (it != pending_calls_.end()) {
             pending_call = it->second;
             pending_calls_.erase(it);
-            LOGD_FMT("Found pending call for correlation_id: " << corr_id_str);
+            LOGV_FMT("Found pending call for correlation_id: " << corr_id_str);
         } else {
             LOGW_FMT("No pending call found for correlation_id: " << corr_id_str);
         }
@@ -537,7 +537,7 @@ void ServiceProxy::handleResponse(MessagePtr message) {
     if (pending_call) {
         try {
             pending_call->promise.set_value(message);
-            LOGD_FMT("Response delivered to pending call");
+            LOGV_FMT("Response delivered to pending call");
         } catch (...) {
             LOGW_FMT("Failed to set promise value (already satisfied or destroyed)");
         }
@@ -552,7 +552,7 @@ void ServiceProxy::receiveThread() {
             auto result = transport_->receive(100);  // 100ms timeout
 
             if (result.success() && result.value) {
-                LOGD_FMT("Message received in receive thread");
+                LOGV_FMT("Message received in receive thread");
                 // Check if it's a response message
                 if (result.value->getType() == MessageType::RESPONSE ||
                     result.value->getType() == MessageType::ERROR) {
@@ -598,7 +598,7 @@ void ServiceProxy::timeoutThread() {
                             std::make_exception_ptr(std::runtime_error("Request timeout"))
                         );
                     } catch (...) {
-                        LOGD_FMT("Promise already satisfied for call_id: " << call_id);
+                        LOGV_FMT("Promise already satisfied for call_id: " << call_id);
                     }
                     pending_calls_.erase(it);
                 }
@@ -610,7 +610,7 @@ void ServiceProxy::timeoutThread() {
 
 uint32_t ServiceProxy::calculateRetryDelay(uint32_t attempt) const {
     if (!config_.retry_policy.exponential_backoff) {
-        LOGD_FMT("Retry delay (fixed): " << config_.retry_policy.initial_delay_ms << "ms");
+        LOGV_FMT("Retry delay (fixed): " << config_.retry_policy.initial_delay_ms << "ms");
         return config_.retry_policy.initial_delay_ms;
     }
 
@@ -622,7 +622,7 @@ uint32_t ServiceProxy::calculateRetryDelay(uint32_t attempt) const {
             break;
         }
     }
-    LOGD_FMT("Retry delay (exponential) for attempt " << attempt << ": " << delay << "ms");
+    LOGV_FMT("Retry delay (exponential) for attempt " << attempt << ": " << delay << "ms");
     return delay;
 }
 
@@ -635,7 +635,7 @@ void ServiceProxy::updateAvgResponseTime(uint64_t response_time_us) {
     } else {
         stats_.avg_response_time_us = response_time_us;
     }
-    LOGD_FMT("Updated avg response time: " << stats_.avg_response_time_us.load()
+    LOGV_FMT("Updated avg response time: " << stats_.avg_response_time_us.load()
              << "us (current: " << response_time_us << "us)");
 }
 

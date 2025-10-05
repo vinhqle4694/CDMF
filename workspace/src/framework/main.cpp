@@ -400,6 +400,10 @@ void printFrameworkStatus(cdmf::Framework* framework) {
  * Main entry point
  */
 int main(int argc, char* argv[]) {
+    // Set log level to hide verbose logs (uncomment to enable)
+    // Options: VERBOSE, DEBUG, INFO, WARNING, ERROR, FATAL
+    utils::setLogLevel(utils::LogLevel::DEBUG);  // Hide VERBOSE and DEBUG logs
+
     LOGI("========================================");
     LOGI("CDMF - C++ Dynamic Module Framework");
     LOGI("       Version 1.0.0");
