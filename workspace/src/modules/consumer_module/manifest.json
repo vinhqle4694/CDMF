@@ -1,0 +1,31 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.consumer.module",
+    "name": "Consumer Module",
+    "version": "1.0.0",
+    "library": "consumer_module.so",
+    "description": "Consumer module that uses Calculator Service to demonstrate module interactions",
+    "vendor": "CDMF Project",
+    "category": "application"
+  },
+
+  "dependencies": [
+    {
+      "symbolic-name": "cdmf.calculator.service",
+      "version-range": "[1.0.0,2.0.0)",
+      "optional": false
+    }
+  ],
+
+  "exports": [],
+
+  "activator": {
+    "class": "cdmf::modules::ConsumerActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {
+    "consumer.demo.enabled": "true"
+  }
+}

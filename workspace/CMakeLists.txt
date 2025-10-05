@@ -114,6 +114,12 @@ add_subdirectory(src/framework)
 # Configuration Service Module
 add_subdirectory(src/modules/config_service_module)
 
+# Calculator Service Module
+add_subdirectory(src/modules/calculator_module)
+
+# Consumer Module
+add_subdirectory(src/modules/consumer_module)
+
 # ==============================================================================
 # Unit Tests
 # ==============================================================================
@@ -199,6 +205,8 @@ message(STATUS "  - cdmf (All-in-one)")
 message(STATUS "")
 message(STATUS "Modules:")
 message(STATUS "  - config_service_module (Configuration service)")
+message(STATUS "  - calculator_module (Calculator service)")
+message(STATUS "  - consumer_module (Consumer module)")
 message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")

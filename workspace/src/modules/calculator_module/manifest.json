@@ -1,0 +1,111 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.calculator.service",
+    "name": "Calculator Service Module",
+    "version": "1.0.0",
+    "library": "calculator_module.so",
+    "description": "Provides basic calculator arithmetic operations",
+    "vendor": "CDMF Project",
+    "category": "application-service"
+  },
+
+  "dependencies": [],
+
+  "exports": [
+    {
+      "interface": "cdmf::ICalculatorService",
+      "version": "1.0.0"
+    }
+  ],
+
+  "activator": {
+    "class": "cdmf::modules::CalculatorActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {},
+
+  "cli-methods": [
+    {
+      "interface": "cdmf::ICalculatorService",
+      "method": "add",
+      "signature": "(a:int, b:int) -> int",
+      "description": "Add two numbers",
+      "arguments": [
+        {
+          "name": "a",
+          "type": "int",
+          "required": true,
+          "description": "First number"
+        },
+        {
+          "name": "b",
+          "type": "int",
+          "required": true,
+          "description": "Second number"
+        }
+      ]
+    },
+    {
+      "interface": "cdmf::ICalculatorService",
+      "method": "subtract",
+      "signature": "(a:int, b:int) -> int",
+      "description": "Subtract two numbers",
+      "arguments": [
+        {
+          "name": "a",
+          "type": "int",
+          "required": true,
+          "description": "First number"
+        },
+        {
+          "name": "b",
+          "type": "int",
+          "required": true,
+          "description": "Second number"
+        }
+      ]
+    },
+    {
+      "interface": "cdmf::ICalculatorService",
+      "method": "multiply",
+      "signature": "(a:int, b:int) -> int",
+      "description": "Multiply two numbers",
+      "arguments": [
+        {
+          "name": "a",
+          "type": "int",
+          "required": true,
+          "description": "First number"
+        },
+        {
+          "name": "b",
+          "type": "int",
+          "required": true,
+          "description": "Second number"
+        }
+      ]
+    },
+    {
+      "interface": "cdmf::ICalculatorService",
+      "method": "divide",
+      "signature": "(a:int, b:int) -> int",
+      "description": "Divide two numbers",
+      "arguments": [
+        {
+          "name": "a",
+          "type": "int",
+          "required": true,
+          "description": "Dividend"
+        },
+        {
+          "name": "b",
+          "type": "int",
+          "required": true,
+          "description": "Divisor (must not be zero)"
+        }
+      ]
+    }
+  ]
+}
