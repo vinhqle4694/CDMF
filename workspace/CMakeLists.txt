@@ -100,9 +100,6 @@ add_subdirectory(src/framework)
 # Modules
 # ==============================================================================
 
-# Configuration Service Module
-add_subdirectory(src/modules/config_service_module)
-
 # ==============================================================================
 # Unit Tests
 # ==============================================================================
@@ -177,7 +174,6 @@ message(STATUS "  - cdmf_security (Security subsystem)")
 message(STATUS "  - cdmf (All-in-one)")
 message(STATUS "")
 message(STATUS "Modules:")
-message(STATUS "  - config_service_module (Configuration service)")
 message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")

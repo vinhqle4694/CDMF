@@ -141,12 +141,6 @@ add_executable(test_resource_limiter unit/test_resource_limiter.cpp)
 target_link_libraries(test_resource_limiter PRIVATE cdmf_security GTest::gtest GTest::gtest_main)
 add_test(NAME ResourceLimiter COMMAND test_resource_limiter)
 
-# PHASE_8 Tests (Framework Services)
-add_executable(test_configuration unit/test_configuration.cpp)
-target_include_directories(test_configuration PRIVATE ${CMAKE_SOURCE_DIR}/src/modules/config_service_module)
-target_link_libraries(test_configuration PRIVATE config_service_module cdmf_core nlohmann_json::nlohmann_json GTest::gtest GTest::gtest_main)
-add_test(NAME Configuration COMMAND test_configuration)
-
 # ==============================================================================
 # Additional Comprehensive Tests
 # ==============================================================================
