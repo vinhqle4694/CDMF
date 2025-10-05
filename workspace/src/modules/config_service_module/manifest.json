@@ -25,7 +25,7 @@
   },
 
   "properties": {
-    "config.storage.dir": "/workspace/build/config/store",
+    "config.storage.dir": "/workspace/build/config/store/config",
     "config.auto.reload": "true",
     "config.persistence.enabled": "true"
   }
