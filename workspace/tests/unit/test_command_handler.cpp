@@ -530,6 +530,40 @@ TEST_F(CommandHandlerTest, CommandWithChineseCharacters) {
 }
 
 // ============================================================================
+// Info Command Tests
+// ============================================================================
+
+TEST_F(CommandHandlerTest, InfoCommandWithoutArguments) {
+    auto result = handler->processCommand("info");
+
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.message.find("Usage"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, InfoCommandWithModuleName) {
+    auto result = handler->processCommand("info test_module");
+
+    // Module doesn't exist, should fail
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.message.find("not found"), std::string::npos);
+}
+
+TEST_F(CommandHandlerTest, InfoCommandWithExtraArguments) {
+    auto result = handler->processCommand("info module1 extra args");
+
+    // Should process first argument and ignore the rest
+    EXPECT_FALSE(result.message.empty());
+}
+
+TEST_F(CommandHandlerTest, InfoCommandInHelpText) {
+    std::string help = handler->getHelpText();
+
+    // Should contain info command
+    EXPECT_NE(help.find("info"), std::string::npos);
+    EXPECT_NE(help.find("module information"), std::string::npos);
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 

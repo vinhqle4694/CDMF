@@ -36,6 +36,7 @@ struct CommandResult {
  * - stop <module_name> - Stop a module
  * - update <module_name> <path> - Update a module
  * - list - List all running modules
+ * - info <module_name> - Show detailed module information and APIs
  * - help - Show help text
  * - exit - Exit the command interface
  */
@@ -102,6 +103,7 @@ private:
     CommandResult handleStop(const std::vector<std::string>& args);
     CommandResult handleUpdate(const std::vector<std::string>& args);
     CommandResult handleList(const std::vector<std::string>& args);
+    CommandResult handleInfo(const std::vector<std::string>& args);
     CommandResult handleHelp(const std::vector<std::string>& args);
     CommandResult handleExit(const std::vector<std::string>& args);
 
