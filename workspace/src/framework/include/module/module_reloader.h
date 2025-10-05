@@ -128,6 +128,14 @@ public:
      */
     bool isRunning() const;
 
+    /**
+     * @brief Get manifest path for a registered module
+     *
+     * @param module Module to query
+     * @return Manifest path if module is registered, empty string otherwise
+     */
+    std::string getManifestPath(Module* module) const;
+
 private:
     /**
      * @brief Handle file change event
@@ -141,9 +149,10 @@ private:
      * @brief Reload a module
      *
      * @param module Module to reload
-     * @param libraryPath New library path
+     * @param libraryPath Library path
+     * @param manifestPath Manifest path
      */
-    void reloadModule(Module* module, const std::string& libraryPath);
+    void reloadModule(Module* module, const std::string& libraryPath, const std::string& manifestPath);
 
     Framework* framework_;
     std::unique_ptr<FileWatcher> fileWatcher_;

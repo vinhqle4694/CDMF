@@ -336,11 +336,45 @@ public:
             LOGI_FMT("Module installed: " << modulePtr->getSymbolicName()
                      << " v" << modulePtr->getVersion().toString());
 
-            // Auto-resolve module if it has no dependencies
+            // Resolve module dependencies
             if (manifest.dependencies.empty()) {
                 LOGI_FMT("  Auto-resolving module (no dependencies)");
                 // Transition from INSTALLED to RESOLVED
                 static_cast<ModuleImpl*>(modulePtr)->transitionTo(ModuleState::RESOLVED);
+            } else {
+                // Check if all dependencies are satisfied
+                bool allDependenciesSatisfied = true;
+                std::string missingDeps;
+
+                for (const auto& dep : manifest.dependencies) {
+                    Module* depModule = moduleRegistry_->findCompatibleModule(
+                        dep.symbolicName,
+                        dep.versionRange
+                    );
+
+                    if (!depModule) {
+                        if (!dep.optional) {
+                            allDependenciesSatisfied = false;
+                            if (!missingDeps.empty()) {
+                                missingDeps += ", ";
+                            }
+                            missingDeps += dep.symbolicName + " " + dep.versionRange.toString();
+                        }
+                    } else {
+                        LOGI_FMT("    Dependency satisfied: " << dep.symbolicName
+                                 << " " << dep.versionRange.toString()
+                                 << " -> found " << depModule->getSymbolicName()
+                                 << " v" << depModule->getVersion().toString());
+                    }
+                }
+
+                if (allDependenciesSatisfied) {
+                    LOGI_FMT("  All dependencies satisfied, resolving module");
+                    static_cast<ModuleImpl*>(modulePtr)->transitionTo(ModuleState::RESOLVED);
+                } else {
+                    LOGW_FMT("  Module has unsatisfied dependencies: " << missingDeps);
+                    LOGW("  Module remains in INSTALLED state until dependencies are resolved");
+                }
             }
 
             // Fire module installed event
@@ -398,11 +432,45 @@ public:
             LOGI_FMT("Module installed: " << modulePtr->getSymbolicName()
                      << " v" << modulePtr->getVersion().toString());
 
-            // Auto-resolve module if it has no dependencies
+            // Resolve module dependencies
             if (manifest.dependencies.empty()) {
                 LOGI_FMT("  Auto-resolving module (no dependencies)");
                 // Transition from INSTALLED to RESOLVED
                 static_cast<ModuleImpl*>(modulePtr)->transitionTo(ModuleState::RESOLVED);
+            } else {
+                // Check if all dependencies are satisfied
+                bool allDependenciesSatisfied = true;
+                std::string missingDeps;
+
+                for (const auto& dep : manifest.dependencies) {
+                    Module* depModule = moduleRegistry_->findCompatibleModule(
+                        dep.symbolicName,
+                        dep.versionRange
+                    );
+
+                    if (!depModule) {
+                        if (!dep.optional) {
+                            allDependenciesSatisfied = false;
+                            if (!missingDeps.empty()) {
+                                missingDeps += ", ";
+                            }
+                            missingDeps += dep.symbolicName + " " + dep.versionRange.toString();
+                        }
+                    } else {
+                        LOGI_FMT("    Dependency satisfied: " << dep.symbolicName
+                                 << " " << dep.versionRange.toString()
+                                 << " -> found " << depModule->getSymbolicName()
+                                 << " v" << depModule->getVersion().toString());
+                    }
+                }
+
+                if (allDependenciesSatisfied) {
+                    LOGI_FMT("  All dependencies satisfied, resolving module");
+                    static_cast<ModuleImpl*>(modulePtr)->transitionTo(ModuleState::RESOLVED);
+                } else {
+                    LOGW_FMT("  Module has unsatisfied dependencies: " << missingDeps);
+                    LOGW("  Module remains in INSTALLED state until dependencies are resolved");
+                }
             }
 
             // Fire module installed event
@@ -436,15 +504,103 @@ public:
             module->stop();
         }
 
-        // Update module
-        module->update(newPath);
+        // Get the module implementation to access manifest
+        ModuleImpl* moduleImpl = static_cast<ModuleImpl*>(module);
 
-        // Restart if it was active
-        if (wasActive) {
-            module->start();
+        // Check if we need to reload the library
+        // Only reload if the library file path is different from current path
+        std::string currentPath = module->getLocation();
+        bool needsLibraryReload = (newPath != currentPath);
+
+        if (needsLibraryReload) {
+            // Update module (reloads the library)
+            LOGI_FMT("  Reloading library from: " << newPath);
+            module->update(newPath);
+        } else {
+            LOGI_FMT("  Library unchanged, skipping reload");
         }
 
+        // Re-read the manifest from disk to get updated dependencies
+        // Get manifest path from module reloader
+        LOGI("  Getting manifest path from module reloader...");
+        std::string manifestPath;
+        if (moduleReloader_) {
+            manifestPath = moduleReloader_->getManifestPath(module);
+            LOGI_FMT("  Got manifest path: " << manifestPath);
+        }
+
+        LOGI("  Parsing manifest...");
+        ModuleManifest manifest;
+        try {
+            if (!manifestPath.empty()) {
+                // Re-parse manifest from file to get latest changes
+                LOGI_FMT("  Reading manifest file: " << manifestPath);
+                manifest = ManifestParser::parseFile(manifestPath);
+                LOGI_FMT("  Re-loaded manifest from: " << manifestPath);
+            } else {
+                // Fallback to in-memory manifest if path not available
+                LOGI("  Using in-memory manifest");
+                auto manifestJson = moduleImpl->getManifest();
+                manifest = ManifestParser::parse(manifestJson);
+                LOGW("  Using in-memory manifest (path not available)");
+            }
+        } catch (const std::exception& e) {
+            LOGE_FMT("  Failed to parse manifest: " << e.what());
+            throw;
+        }
+
+        // Re-resolve dependencies after update
+        if (manifest.dependencies.empty()) {
+            LOGI_FMT("  Auto-resolving module (no dependencies)");
+            moduleImpl->transitionTo(ModuleState::RESOLVED);
+        } else {
+            // Check if all dependencies are satisfied
+            bool allDependenciesSatisfied = true;
+            std::string missingDeps;
+
+            for (const auto& dep : manifest.dependencies) {
+                Module* depModule = moduleRegistry_->findCompatibleModule(
+                    dep.symbolicName,
+                    dep.versionRange
+                );
+
+                if (!depModule) {
+                    if (!dep.optional) {
+                        allDependenciesSatisfied = false;
+                        if (!missingDeps.empty()) {
+                            missingDeps += ", ";
+                        }
+                        missingDeps += dep.symbolicName + " " + dep.versionRange.toString();
+                    }
+                } else {
+                    LOGI_FMT("    Dependency satisfied: " << dep.symbolicName
+                             << " " << dep.versionRange.toString()
+                             << " -> found " << depModule->getSymbolicName()
+                             << " v" << depModule->getVersion().toString());
+                }
+            }
+
+            if (allDependenciesSatisfied) {
+                LOGI_FMT("  All dependencies satisfied, resolving module");
+                moduleImpl->transitionTo(ModuleState::RESOLVED);
+            } else {
+                LOGW_FMT("  Module has unsatisfied dependencies: " << missingDeps);
+                LOGW("  Module remains in INSTALLED state until dependencies are resolved");
+            }
+        }
+
+        // Restart if it was active and is now resolved
+        LOGI_FMT("  Checking if module needs restart (wasActive=" << wasActive
+                 << ", currentState=" << static_cast<int>(module->getState()) << ")");
+        if (wasActive && module->getState() == ModuleState::RESOLVED) {
+            LOGI("  Restarting module...");
+            module->start();
+            LOGI("  Module restarted");
+        }
+
+        LOGI("  Firing MODULE_UPDATED event...");
         fireFrameworkEvent(FrameworkEventType::MODULE_UPDATED, module, "Module updated");
+        LOGI("  Module update complete");
     }
 
     void uninstallModule(Module* module) override {

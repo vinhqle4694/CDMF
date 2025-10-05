@@ -79,7 +79,7 @@ bool ModuleReloader::registerModule(Module* module,
     info.manifestPath = manifestPath;
     info.autoReloadEnabled = true;
 
-    // Register with file watcher
+    // Register library file with file watcher
     bool watchAdded = fileWatcher_->watch(libraryPath,
         [this](const std::string& path, FileEvent event) {
             onFileChanged(path, event);
@@ -88,6 +88,22 @@ bool ModuleReloader::registerModule(Module* module,
     if (!watchAdded) {
         LOGE_FMT("ModuleReloader: failed to watch " << libraryPath);
         return false;
+    }
+
+    // Also register manifest file if provided
+    if (!manifestPath.empty()) {
+        bool manifestWatchAdded = fileWatcher_->watch(manifestPath,
+            [this](const std::string& path, FileEvent event) {
+                onFileChanged(path, event);
+            });
+
+        if (!manifestWatchAdded) {
+            LOGW_FMT("ModuleReloader: failed to watch manifest " << manifestPath);
+            // Don't fail registration, manifest watching is optional
+        } else {
+            pathToModuleMap_[manifestPath] = module;
+            LOGI_FMT("ModuleReloader: watching manifest " << manifestPath);
+        }
     }
 
     // Store module info
@@ -112,8 +128,14 @@ void ModuleReloader::unregisterModule(Module* module) {
         return;
     }
 
-    // Remove from file watcher
+    // Remove library file from file watcher
     fileWatcher_->unwatch(it->second.libraryPath);
+
+    // Remove manifest file from file watcher if it was registered
+    if (!it->second.manifestPath.empty()) {
+        fileWatcher_->unwatch(it->second.manifestPath);
+        pathToModuleMap_.erase(it->second.manifestPath);
+    }
 
     // Remove from maps
     pathToModuleMap_.erase(it->second.libraryPath);
@@ -140,9 +162,25 @@ bool ModuleReloader::isRunning() const {
     return fileWatcher_->isRunning();
 }
 
+std::string ModuleReloader::getManifestPath(Module* module) const {
+    if (!module) {
+        return "";
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    auto it = registeredModules_.find(module);
+    if (it == registeredModules_.end()) {
+        return "";
+    }
+
+    return it->second.manifestPath;
+}
+
 void ModuleReloader::onFileChanged(const std::string& path, FileEvent event) {
-    // Only handle MODIFIED events (ignore CREATED and DELETED for now)
-    if (event != FileEvent::MODIFIED) {
+    // Handle MODIFIED and CREATED events (CREATED happens after rebuild)
+    // DELETED is ignored as it's usually followed by CREATED during rebuild
+    if (event != FileEvent::MODIFIED && event != FileEvent::CREATED) {
         return;
     }
 
@@ -152,44 +190,59 @@ void ModuleReloader::onFileChanged(const std::string& path, FileEvent event) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    // Copy module info while holding lock, then release lock before calling reloadModule
+    // This prevents deadlock when updateModule calls back into getManifestPath
+    Module* modulePtr = nullptr;
+    std::string libraryPath;
+    std::string manifestPath;
+    std::string symbolicName;
 
-    // Find module for this path
-    auto pathIt = pathToModuleMap_.find(path);
-    if (pathIt == pathToModuleMap_.end()) {
-        LOGW_FMT("ModuleReloader: file changed but no module found: " << path);
-        return;
-    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
 
-    Module* module = pathIt->second;
+        // Find module for this path
+        auto pathIt = pathToModuleMap_.find(path);
+        if (pathIt == pathToModuleMap_.end()) {
+            LOGW_FMT("ModuleReloader: file changed but no module found: " << path);
+            return;
+        }
 
-    // Get module info
-    auto moduleIt = registeredModules_.find(module);
-    if (moduleIt == registeredModules_.end()) {
-        LOGW_FMT("ModuleReloader: module info not found for " << path);
-        return;
-    }
+        Module* module = pathIt->second;
 
-    const ModuleReloadInfo& info = moduleIt->second;
+        // Get module info
+        auto moduleIt = registeredModules_.find(module);
+        if (moduleIt == registeredModules_.end()) {
+            LOGW_FMT("ModuleReloader: module info not found for " << path);
+            return;
+        }
 
-    if (!info.autoReloadEnabled) {
-        LOGI_FMT("ModuleReloader: auto-reload disabled for module " << module->getSymbolicName());
-        return;
-    }
+        const ModuleReloadInfo& info = moduleIt->second;
 
-    LOGI_FMT("ModuleReloader: reloading module " << module->getSymbolicName()
+        if (!info.autoReloadEnabled) {
+            LOGI_FMT("ModuleReloader: auto-reload disabled for module " << module->getSymbolicName());
+            return;
+        }
+
+        // Copy all needed data before releasing lock
+        modulePtr = module;
+        symbolicName = module->getSymbolicName();
+        libraryPath = info.libraryPath;
+        manifestPath = info.manifestPath;
+    } // Lock released here!
+
+    LOGI_FMT("ModuleReloader: reloading module " << symbolicName
              << " (library changed: " << path << ")");
 
-    // Reload the module
+    // Reload the module (lock is now released to prevent deadlock)
     try {
-        reloadModule(module, info.libraryPath);
+        reloadModule(modulePtr, libraryPath, manifestPath);
     } catch (const std::exception& e) {
-        LOGE_FMT("ModuleReloader: failed to reload module " << module->getSymbolicName()
+        LOGE_FMT("ModuleReloader: failed to reload module " << symbolicName
                  << ": " << e.what());
     }
 }
 
-void ModuleReloader::reloadModule(Module* module, const std::string& libraryPath) {
+void ModuleReloader::reloadModule(Module* module, const std::string& libraryPath, const std::string& manifestPath) {
     if (!module || !framework_) {
         return;
     }
@@ -202,7 +255,7 @@ void ModuleReloader::reloadModule(Module* module, const std::string& libraryPath
     LOGI_FMT("ModuleReloader: reloading " << symbolicName << " v" << version
              << " (was " << (wasActive ? "ACTIVE" : "INACTIVE") << ")");
 
-    // Use framework's updateModule method
+    // Use framework's updateModule method (handles both library and manifest changes)
     framework_->updateModule(module, libraryPath);
 
     LOGI_FMT("ModuleReloader: successfully reloaded " << symbolicName
