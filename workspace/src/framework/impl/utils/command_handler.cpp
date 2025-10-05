@@ -35,6 +35,10 @@ CommandHandler::CommandHandler(Framework* framework)
 CommandHandler::~CommandHandler() {
 }
 
+void CommandHandler::requestExit() {
+    exitRequested_ = true;
+}
+
 void CommandHandler::registerCommands() {
     commands_["start"] = [this](const std::vector<std::string>& args) { return handleStart(args); };
     commands_["stop"] = [this](const std::vector<std::string>& args) { return handleStop(args); };

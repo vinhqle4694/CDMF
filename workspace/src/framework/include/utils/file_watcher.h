@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <condition_variable>
 
 namespace cdmf {
 
@@ -141,6 +142,7 @@ private:
     std::thread watcherThread_;
 
     mutable std::mutex mutex_;
+    std::condition_variable cv_;
     std::map<std::string, FileMetadata> watchedFiles_;
 };
 

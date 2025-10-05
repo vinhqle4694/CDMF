@@ -31,6 +31,7 @@ void FileWatcher::stop() {
     }
 
     running_ = false;
+    cv_.notify_all(); // Wake up the thread immediately
 
     if (watcherThread_.joinable()) {
         watcherThread_.join();
@@ -118,8 +119,11 @@ void FileWatcher::watcherLoop() {
             }
         }
 
-        // Sleep for poll interval
-        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs_));
+        // Wait with condition variable for fast shutdown
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait_for(lock, std::chrono::milliseconds(pollIntervalMs_), [this]() {
+            return !running_;
+        });
     }
 }
 

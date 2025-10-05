@@ -39,6 +39,7 @@
 // Global framework instance
 std::unique_ptr<cdmf::Framework> g_framework;
 std::atomic<bool> g_running{true};
+cdmf::CommandHandler* g_commandHandler = nullptr;
 
 /**
  * Signal handler for graceful shutdown
@@ -46,6 +47,13 @@ std::atomic<bool> g_running{true};
 void signalHandler(int signal) {
     LOGW_FMT("Received signal " << signal << ", initiating graceful shutdown...");
     g_running = false;
+
+    // Request command handler to exit (breaks out of stdin blocking)
+    if (g_commandHandler) {
+        g_commandHandler->requestExit();
+        // Print newline to help readline exit cleanly
+        std::cout << "\n";
+    }
 
     if (g_framework) {
         g_framework->stop(5000); // 5 second timeout
@@ -447,6 +455,7 @@ int main(int argc, char* argv[]) {
 
         // Create command handler and run interactive mode
         cdmf::CommandHandler commandHandler(g_framework.get());
+        g_commandHandler = &commandHandler; // Set global pointer for signal handler
 
         // Run in separate thread to allow Ctrl+C handling
         std::thread commandThread([&commandHandler]() {
@@ -465,10 +474,37 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Wait for command thread to finish
+        // Wait for command thread to finish (with timeout)
         if (commandThread.joinable()) {
-            commandThread.join();
+            // Give readline 2 seconds to finish, then detach
+            auto start = std::chrono::steady_clock::now();
+            while (commandThread.joinable()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                auto elapsed = std::chrono::steady_clock::now() - start;
+                if (elapsed > std::chrono::seconds(2)) {
+                    LOGW("Command thread did not exit cleanly, detaching...");
+                    commandThread.detach();
+                    break;
+                }
+
+                // Check if thread finished
+                if (!g_running && !commandThread.joinable()) {
+                    break;
+                }
+            }
+
+            // Try to join if still joinable
+            if (commandThread.joinable()) {
+                try {
+                    commandThread.join();
+                } catch (...) {
+                    // Ignore join errors
+                }
+            }
         }
+
+        // Clear global pointer
+        g_commandHandler = nullptr;
 
         // Graceful shutdown
         LOGI("Stopping framework...");

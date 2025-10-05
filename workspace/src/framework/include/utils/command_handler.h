@@ -74,6 +74,13 @@ public:
      */
     void runInteractive();
 
+    /**
+     * @brief Request exit from interactive mode
+     *
+     * Can be called from signal handlers to gracefully exit
+     */
+    void requestExit();
+
 private:
     // Command handler type
     using CommandFunc = std::function<CommandResult(const std::vector<std::string>&)>;
