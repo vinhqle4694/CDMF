@@ -10,6 +10,7 @@
 namespace utils {
 
 enum class LogLevel {
+    VERBOSE,
     DEBUG,
     INFO,
     WARNING,
@@ -17,8 +18,29 @@ enum class LogLevel {
     FATAL
 };
 
+// Default log level - can be overridden at compile time
+// Define CDMF_LOG_LEVEL_DEFAULT to change default level
+// Example: -DCDMF_LOG_LEVEL_DEFAULT=LogLevel::INFO to hide VERBOSE and DEBUG
+#ifndef CDMF_LOG_LEVEL_DEFAULT
+    #define CDMF_LOG_LEVEL_DEFAULT ::utils::LogLevel::VERBOSE
+#endif
+
+// Global maximum log level - logs below this level are suppressed
+static LogLevel g_max_log_level = CDMF_LOG_LEVEL_DEFAULT;
+
+// Set the maximum log level at runtime
+inline void setLogLevel(LogLevel level) {
+    g_max_log_level = level;
+}
+
+// Get the current maximum log level
+inline LogLevel getLogLevel() {
+    return g_max_log_level;
+}
+
 inline const char* logLevelToString(LogLevel level) {
     switch (level) {
+        case LogLevel::VERBOSE: return "VERBOSE";
         case LogLevel::DEBUG:   return "DEBUG";
         case LogLevel::INFO:    return "INFO";
         case LogLevel::WARNING: return "WARNING";
@@ -58,6 +80,11 @@ inline const char* extractFilename(const char* path) {
 }
 
 inline void log(LogLevel level, const char* file, int line, const std::string& message) {
+    // Filter out logs below the maximum log level
+    if (level < g_max_log_level) {
+        return;
+    }
+
     std::ostringstream oss;
     oss << "[" << getCurrentTimestamp() << "] "
         << "[" << logLevelToString(level) << "] "
@@ -73,7 +100,27 @@ inline void log(LogLevel level, const char* file, int line, const std::string& m
 
 } // namespace utils
 
+/**
+ * @brief Log Level Filtering
+ *
+ * Usage:
+ * 1. Set log level at compile time (in CMakeLists.txt):
+ *    add_definitions(-DCDMF_LOG_LEVEL_DEFAULT=::utils::LogLevel::INFO)
+ *
+ * 2. Set log level at runtime (in main.cpp or anywhere):
+ *    utils::setLogLevel(utils::LogLevel::INFO);  // Hide VERBOSE and DEBUG
+ *
+ * 3. Get current log level:
+ *    auto level = utils::getLogLevel();
+ *
+ * Log levels (from lowest to highest):
+ *   VERBOSE < DEBUG < INFO < WARNING < ERROR < FATAL
+ *
+ * Example: Setting to INFO will show INFO, WARNING, ERROR, and FATAL only.
+ */
+
 // Log macros
+#define LOGV(msg) ::utils::log(::utils::LogLevel::VERBOSE, __FILE__, __LINE__, msg)
 #define LOGD(msg) ::utils::log(::utils::LogLevel::DEBUG, __FILE__, __LINE__, msg)
 #define LOGI(msg) ::utils::log(::utils::LogLevel::INFO, __FILE__, __LINE__, msg)
 #define LOGW(msg) ::utils::log(::utils::LogLevel::WARNING, __FILE__, __LINE__, msg)
@@ -81,6 +128,7 @@ inline void log(LogLevel level, const char* file, int line, const std::string& m
 #define LOGF(msg) ::utils::log(::utils::LogLevel::FATAL, __FILE__, __LINE__, msg)
 
 // Formatted log macros (support for stream-style formatting)
+#define LOGV_FMT(msg) { std::ostringstream _oss; _oss << msg; LOGV(_oss.str()); }
 #define LOGD_FMT(msg) { std::ostringstream _oss; _oss << msg; LOGD(_oss.str()); }
 #define LOGI_FMT(msg) { std::ostringstream _oss; _oss << msg; LOGI(_oss.str()); }
 #define LOGW_FMT(msg) { std::ostringstream _oss; _oss << msg; LOGW(_oss.str()); }

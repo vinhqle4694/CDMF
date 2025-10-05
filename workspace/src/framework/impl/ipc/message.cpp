@@ -491,7 +491,7 @@ void Message::updateChecksum() {
     std::lock_guard<std::mutex> lock(mutex_);
     header_.checksum = payload_.empty() ? 0 :
         crc32(payload_.data(), static_cast<uint32_t>(payload_.size()));
-    LOGD_FMT("Updated message checksum: " << header_.checksum
+    LOGV_FMT("Updated message checksum: " << header_.checksum
              << ", payload_size: " << payload_.size());
 }
 
@@ -499,7 +499,7 @@ bool Message::verifyChecksum() const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (payload_.empty()) {
         bool valid = (header_.checksum == 0);
-        LOGD_FMT("Verifying checksum for empty payload: " << (valid ? "PASS" : "FAIL")
+        LOGV_FMT("Verifying checksum for empty payload: " << (valid ? "PASS" : "FAIL")
                  << ", stored: " << header_.checksum);
         return valid;
     }
@@ -510,7 +510,7 @@ bool Message::verifyChecksum() const {
                  << ", stored: " << header_.checksum
                  << ", payload_size: " << payload_.size());
     } else {
-        LOGD_FMT("Checksum verification PASSED - checksum: " << computed
+        LOGV_FMT("Checksum verification PASSED - checksum: " << computed
                  << ", payload_size: " << payload_.size());
     }
     return valid;
