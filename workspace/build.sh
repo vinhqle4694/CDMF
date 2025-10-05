@@ -14,7 +14,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 BUILD_DIR="build"
-BUILD_TYPE="${BUILD_TYPE:-Release}"
+BUILD_TYPE="${BUILD_TYPE:-Debug}"
 NUM_JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # Functions
