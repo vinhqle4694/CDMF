@@ -168,7 +168,7 @@ add_test(NAME VersionManager COMMAND test_version_manager)
 
 # Command Handler Tests (Utilities)
 add_executable(test_command_handler unit/test_command_handler.cpp)
-target_link_libraries(test_command_handler PRIVATE cdmf_foundation cdmf_core GTest::gtest GTest::gtest_main)
+target_link_libraries(test_command_handler PRIVATE cdmf_foundation cdmf_core cdmf_service GTest::gtest GTest::gtest_main)
 add_test(NAME CommandHandler COMMAND test_command_handler)
 
 # Module Reloader Tests (Module Management)

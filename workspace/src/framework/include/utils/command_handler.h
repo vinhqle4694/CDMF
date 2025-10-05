@@ -37,6 +37,7 @@ struct CommandResult {
  * - update <module_name> <path> - Update a module
  * - list - List all running modules
  * - info <module_name> - Show detailed module information and APIs
+ * - call <service> <method> [args...] - Call a service method (if registered via manifest)
  * - help - Show help text
  * - exit - Exit the command interface
  */
@@ -104,6 +105,7 @@ private:
     CommandResult handleUpdate(const std::vector<std::string>& args);
     CommandResult handleList(const std::vector<std::string>& args);
     CommandResult handleInfo(const std::vector<std::string>& args);
+    CommandResult handleCall(const std::vector<std::string>& args);
     CommandResult handleHelp(const std::vector<std::string>& args);
     CommandResult handleExit(const std::vector<std::string>& args);
 

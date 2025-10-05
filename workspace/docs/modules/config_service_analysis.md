@@ -60,7 +60,7 @@ The Configuration Service provides all of this functionality as a reusable, fram
 │  │  - PID           │   │  - Load from disk       │     │
 │  │  - Properties    │   │  - Save to disk         │     │
 │  │  - Update/Remove │   │  - File management      │     │
-│  └──────────────────┘   └───────────────────── ───┘     │
+│  └──────────────────┘   └─────────────────────────┘     │
 │                 │                                       │
 │  ┌──────────────▼───────────────────────────────┐       │
 │  │  ConfigurationListener (Observer Pattern)    │       │

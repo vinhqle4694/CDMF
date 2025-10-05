@@ -76,6 +76,23 @@ struct ModuleManifest {
     };
     std::vector<RequiredService> requiredServices;
 
+    // CLI Methods
+    struct CLIMethodArgument {
+        std::string name;
+        std::string type;
+        bool required;
+        std::string description;
+    };
+
+    struct CLIMethod {
+        std::string interface;          ///< Service interface (e.g., "cdmf::IConfigurationAdmin")
+        std::string method;              ///< Method name (e.g., "createConfiguration")
+        std::string signature;           ///< Method signature (e.g., "(pid:string) -> void")
+        std::string description;         ///< Method description
+        std::vector<CLIMethodArgument> arguments;  ///< Method arguments
+    };
+    std::vector<CLIMethod> cliMethods;
+
     // Security
     std::vector<std::string> permissions;
     bool sandboxEnabled;
@@ -98,6 +115,7 @@ struct ModuleManifest {
         , importedPackages()
         , providedServices()
         , requiredServices()
+        , cliMethods()
         , permissions()
         , sandboxEnabled(false)
         , rawJson() {}
@@ -176,6 +194,7 @@ private:
     static void parseExportedPackages(const nlohmann::json& json, ModuleManifest& manifest);
     static void parseImportedPackages(const nlohmann::json& json, ModuleManifest& manifest);
     static void parseServices(const nlohmann::json& json, ModuleManifest& manifest);
+    static void parseCLIMethods(const nlohmann::json& json, ModuleManifest& manifest);
     static void parseSecurity(const nlohmann::json& json, ModuleManifest& manifest);
 
     static std::string getString(const nlohmann::json& json, const std::string& key,

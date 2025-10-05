@@ -53,6 +53,10 @@ ModuleManifest ManifestParser::parse(const nlohmann::json& json) {
         parseServices(json["services"], manifest);
     }
 
+    if (json.contains("cli-methods")) {
+        parseCLIMethods(json["cli-methods"], manifest);
+    }
+
     if (json.contains("security")) {
         parseSecurity(json["security"], manifest);
     }
@@ -217,6 +221,50 @@ void ManifestParser::parseSecurity(const nlohmann::json& json, ModuleManifest& m
     // Parse sandbox
     if (json.contains("sandbox") && json["sandbox"].is_object()) {
         manifest.sandboxEnabled = getBool(json["sandbox"], "enabled", false);
+    }
+}
+
+void ManifestParser::parseCLIMethods(const nlohmann::json& json, ModuleManifest& manifest) {
+    if (!json.is_array()) {
+        return;
+    }
+
+    for (const auto& methodJson : json) {
+        if (!methodJson.is_object()) {
+            continue;
+        }
+
+        ModuleManifest::CLIMethod method;
+
+        // Required fields
+        method.interface = getString(methodJson, "interface");
+        method.method = getString(methodJson, "method");
+        method.signature = getString(methodJson, "signature");
+        method.description = getString(methodJson, "description");
+
+        if (method.interface.empty() || method.method.empty()) {
+            // Skip invalid method declarations
+            continue;
+        }
+
+        // Parse arguments (optional)
+        if (methodJson.contains("arguments") && methodJson["arguments"].is_array()) {
+            for (const auto& argJson : methodJson["arguments"]) {
+                if (!argJson.is_object()) {
+                    continue;
+                }
+
+                ModuleManifest::CLIMethodArgument arg;
+                arg.name = getString(argJson, "name");
+                arg.type = getString(argJson, "type");
+                arg.required = getBool(argJson, "required", false);
+                arg.description = getString(argJson, "description");
+
+                method.arguments.push_back(arg);
+            }
+        }
+
+        manifest.cliMethods.push_back(method);
     }
 }
 

@@ -10,6 +10,7 @@
 #include "configuration_listener.h"
 #include "configuration_event.h"
 #include "persistence_manager.h"
+#include "service/command_dispatcher.h"
 
 namespace cdmf {
 namespace services {
@@ -21,8 +22,11 @@ namespace services {
  * The Configuration Admin service provides a centralized way to manage
  * configuration objects. It supports creating, updating, and deleting
  * configurations, as well as notifying listeners of changes.
+ *
+ * Implements ICommandDispatcher to provide CLI access to configuration
+ * management operations. CLI methods are declared in the module manifest.
  */
-class ConfigurationAdmin {
+class ConfigurationAdmin : public cdmf::ICommandDispatcher {
 public:
     /**
      * @brief Constructor
@@ -84,6 +88,16 @@ public:
      * @brief Save all configurations to persistent storage
      */
     void saveConfigurations();
+
+    // ICommandDispatcher interface implementation
+    /**
+     * @brief Dispatch a CLI command to the appropriate method
+     * @param methodName Name of the method to invoke
+     * @param args Command arguments
+     * @return Result message (success or error)
+     */
+    std::string dispatchCommand(const std::string& methodName,
+                               const std::vector<std::string>& args) override;
 
 private:
     /**

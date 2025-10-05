@@ -81,7 +81,6 @@ set(CDMF_CORE_SOURCES
     impl/utils/version_range.cpp
     impl/utils/version_manager.cpp
     impl/utils/properties.cpp
-    impl/utils/command_handler.cpp
     impl/core/event.cpp
     impl/core/event_filter.cpp
     impl/core/framework_properties.cpp
@@ -107,25 +106,6 @@ target_link_libraries(cdmf_core
         cdmf_foundation
 )
 
-# Link readline library for command history support (Linux/Unix only)
-if(UNIX AND NOT APPLE)
-    find_library(READLINE_LIBRARY readline)
-    if(READLINE_LIBRARY)
-        target_link_libraries(cdmf_core PRIVATE ${READLINE_LIBRARY})
-        message(STATUS "Found readline library: ${READLINE_LIBRARY}")
-    else()
-        message(STATUS "readline library not found - command history will be disabled")
-    endif()
-elseif(APPLE)
-    find_library(READLINE_LIBRARY readline)
-    if(READLINE_LIBRARY)
-        target_link_libraries(cdmf_core PRIVATE ${READLINE_LIBRARY})
-        message(STATUS "Found readline library: ${READLINE_LIBRARY}")
-    else()
-        message(STATUS "readline library not found - command history will be disabled")
-    endif()
-endif()
-
 # ==============================================================================
 # Library: cdmf_service (Service layer - Basic types)
 # ==============================================================================
@@ -136,6 +116,7 @@ set(CDMF_SERVICE_SOURCES
     impl/service/service_event.cpp
     impl/service/service_registration.cpp
     impl/service/service_registry.cpp
+    impl/utils/command_handler.cpp
 )
 
 if(CDMF_BUILD_SHARED_LIBS)
@@ -156,6 +137,25 @@ target_link_libraries(cdmf_service
     PRIVATE
         nlohmann_json::nlohmann_json
 )
+
+# Link readline library for command history support (Linux/Unix only)
+if(UNIX AND NOT APPLE)
+    find_library(READLINE_LIBRARY readline)
+    if(READLINE_LIBRARY)
+        target_link_libraries(cdmf_service PRIVATE ${READLINE_LIBRARY})
+        message(STATUS "Found readline library: ${READLINE_LIBRARY}")
+    else()
+        message(STATUS "readline library not found - command history will be disabled")
+    endif()
+elseif(APPLE)
+    find_library(READLINE_LIBRARY readline)
+    if(READLINE_LIBRARY)
+        target_link_libraries(cdmf_service PRIVATE ${READLINE_LIBRARY})
+        message(STATUS "Found readline library: ${READLINE_LIBRARY}")
+    else()
+        message(STATUS "readline library not found - command history will be disabled")
+    endif()
+endif()
 
 # ==============================================================================
 # Library: cdmf_ipc (Inter-Process Communication)

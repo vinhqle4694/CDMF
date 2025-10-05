@@ -25,23 +25,54 @@ public:
         return "";
     }
 
-    ServiceRegistration registerService(const std::string&, void*, const Properties&) override {
+    ServiceRegistration registerService(const std::string& serviceName, void* serviceInstance, const Properties& props) override {
+        if (framework_) {
+            // Delegate to framework context which will register the service
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->registerService(serviceName, serviceInstance, props);
+            }
+        }
         return ServiceRegistration();
     }
 
-    std::vector<ServiceReference> getServiceReferences(const std::string&, const std::string&) const override {
+    std::vector<ServiceReference> getServiceReferences(const std::string& serviceName, const std::string& filter) const override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->getServiceReferences(serviceName, filter);
+            }
+        }
         return {};
     }
 
-    ServiceReference getServiceReference(const std::string&) const override {
+    ServiceReference getServiceReference(const std::string& serviceName) const override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->getServiceReference(serviceName);
+            }
+        }
         return ServiceReference();
     }
 
-    std::shared_ptr<void> getService(const ServiceReference&) override {
+    std::shared_ptr<void> getService(const ServiceReference& serviceRef) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->getService(serviceRef);
+            }
+        }
         return nullptr;
     }
 
-    bool ungetService(const ServiceReference&) override {
+    bool ungetService(const ServiceReference& serviceRef) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->ungetService(serviceRef);
+            }
+        }
         return false;
     }
 

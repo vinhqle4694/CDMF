@@ -7,6 +7,7 @@
 #include "core/framework.h"
 #include "module/module.h"
 #include "module/module_types.h"
+#include "service/command_dispatcher.h"
 #include "utils/log.h"
 #include <iostream>
 #include <sstream>
@@ -40,6 +41,7 @@ void CommandHandler::registerCommands() {
     commands_["update"] = [this](const std::vector<std::string>& args) { return handleUpdate(args); };
     commands_["list"] = [this](const std::vector<std::string>& args) { return handleList(args); };
     commands_["info"] = [this](const std::vector<std::string>& args) { return handleInfo(args); };
+    commands_["call"] = [this](const std::vector<std::string>& args) { return handleCall(args); };
     commands_["help"] = [this](const std::vector<std::string>& args) { return handleHelp(args); };
     commands_["exit"] = [this](const std::vector<std::string>& args) { return handleExit(args); };
 }
@@ -84,13 +86,14 @@ CommandResult CommandHandler::processCommand(const std::string& commandLine) {
 std::string CommandHandler::getHelpText() const {
     std::ostringstream oss;
     oss << "Available commands:\n";
-    oss << "  start <module_name>           - Start a module\n";
-    oss << "  stop <module_name>            - Stop a module\n";
-    oss << "  update <module_name> <path>   - Update a module to a new version\n";
-    oss << "  list                          - List all modules with status\n";
-    oss << "  info <module_name>            - Show detailed module information and APIs\n";
-    oss << "  help                          - Show this help message\n";
-    oss << "  exit                          - Exit the command interface\n";
+    oss << "  start <module_name>               - Start a module\n";
+    oss << "  stop <module_name>                - Stop a module\n";
+    oss << "  update <module_name> <path>       - Update a module to a new version\n";
+    oss << "  list                              - List all modules with status\n";
+    oss << "  info <module_name>                - Show detailed module information and APIs\n";
+    oss << "  call <service> <method> [args...] - Call a service method\n";
+    oss << "  help                              - Show this help message\n";
+    oss << "  exit                              - Exit the command interface\n";
     return oss.str();
 }
 
@@ -507,6 +510,191 @@ CommandResult CommandHandler::handleInfo(const std::vector<std::string>& args) {
     }
 
     return CommandResult(true, oss.str());
+}
+
+CommandResult CommandHandler::handleCall(const std::vector<std::string>& args) {
+    // Parse: call <service_interface> <method_name> [args...]
+
+    if (args.empty() || args[0] == "--help" || args[0] == "-h") {
+        std::ostringstream oss;
+        oss << "Usage: call <service> <method> [args...]\n\n";
+        oss << "Call a service method that has been registered via module manifest.\n\n";
+        oss << "Special commands:\n";
+        oss << "  call --list                   - List all services with callable methods\n";
+        oss << "  call <service> --help         - List methods for a service\n\n";
+        oss << "Examples:\n";
+        oss << "  call cdmf::IConfigurationAdmin createConfiguration com.myapp.db\n";
+        oss << "  call cdmf::IConfigurationAdmin listConfigurations\n";
+        oss << "  call cdmf::IConfigurationAdmin deleteConfiguration com.myapp.db\n";
+        return CommandResult(true, oss.str());
+    }
+
+    if (args[0] == "--list") {
+        // List all modules with CLI methods
+        if (!framework_) {
+            return CommandResult(false, "Framework not available");
+        }
+
+        auto modules = framework_->getModules();
+        std::ostringstream oss;
+        oss << "Services with callable methods:\n\n";
+
+        int count = 0;
+        for (auto* module : modules) {
+            if (!module) continue;
+
+            const auto& manifest = module->getManifest();
+            if (manifest.contains("cli-methods") && manifest["cli-methods"].is_array() &&
+                !manifest["cli-methods"].empty()) {
+
+                // Group methods by service interface
+                std::map<std::string, int> methodsByInterface;
+                for (const auto& method : manifest["cli-methods"]) {
+                    if (method.contains("interface")) {
+                        std::string iface = method["interface"].get<std::string>();
+                        methodsByInterface[iface]++;
+                    }
+                }
+
+                for (const auto& pair : methodsByInterface) {
+                    oss << "  * " << pair.first << " (" << pair.second << " method(s))\n";
+                    count++;
+                }
+            }
+        }
+
+        if (count == 0) {
+            oss << "  (No services with callable methods found)\n";
+        }
+
+        oss << "\nUse 'call <service> --help' to see methods for a service.\n";
+        return CommandResult(true, oss.str());
+    }
+
+    // Parse service interface and method
+    if (args.size() < 2) {
+        return CommandResult(false, "Usage: call <service> <method> [args...]\n"
+                                   "Use 'call --help' for more information.");
+    }
+
+    std::string serviceInterface = args[0];
+    std::string methodName = args[1];
+
+    // Handle service --help
+    if (methodName == "--help" || methodName == "-h") {
+        if (!framework_) {
+            return CommandResult(false, "Framework not available");
+        }
+
+        auto modules = framework_->getModules();
+        std::ostringstream oss;
+        oss << "Available methods for " << serviceInterface << ":\n\n";
+
+        int methodCount = 0;
+        for (auto* module : modules) {
+            if (!module) continue;
+
+            const auto& manifest = module->getManifest();
+            if (manifest.contains("cli-methods") && manifest["cli-methods"].is_array()) {
+                for (const auto& method : manifest["cli-methods"]) {
+                    if (!method.contains("interface") || !method.contains("method")) continue;
+
+                    if (method["interface"].get<std::string>() == serviceInterface) {
+                        oss << "  " << method["method"].get<std::string>();
+                        if (method.contains("signature")) {
+                            oss << " " << method["signature"].get<std::string>();
+                        }
+                        oss << "\n";
+                        if (method.contains("description")) {
+                            oss << "    " << method["description"].get<std::string>() << "\n";
+                        }
+                        methodCount++;
+                    }
+                }
+            }
+        }
+
+        if (methodCount == 0) {
+            return CommandResult(false, "Service not found or has no callable methods: " + serviceInterface);
+        }
+
+        return CommandResult(true, oss.str());
+    }
+
+    // Find the module that provides this service
+    if (!framework_) {
+        return CommandResult(false, "Framework not available");
+    }
+
+    auto modules = framework_->getModules();
+    Module* targetModule = nullptr;
+
+    for (auto* module : modules) {
+        if (!module) continue;
+
+        const auto& manifest = module->getManifest();
+        if (manifest.contains("cli-methods") && manifest["cli-methods"].is_array()) {
+            for (const auto& method : manifest["cli-methods"]) {
+                if (!method.contains("interface") || !method.contains("method")) continue;
+
+                if (method["interface"].get<std::string>() == serviceInterface &&
+                    method["method"].get<std::string>() == methodName) {
+                    targetModule = module;
+                    break;
+                }
+            }
+        }
+
+        if (targetModule) break;
+    }
+
+    if (!targetModule) {
+        return CommandResult(false, "Method '" + methodName + "' not found for service '" +
+                                   serviceInterface + "'\nUse 'call " + serviceInterface +
+                                   " --help' to see available methods.");
+    }
+
+    // Get the service instance from the module's context
+    IModuleContext* context = targetModule->getContext();
+    if (!context) {
+        return CommandResult(false, "Module context not available");
+    }
+
+    // Get service reference for the interface
+    ServiceReference serviceRef = context->getServiceReference(serviceInterface);
+    if (!serviceRef.isValid()) {
+        return CommandResult(false, "Service '" + serviceInterface + "' not registered by module");
+    }
+
+    // Get the actual service instance
+    std::shared_ptr<void> servicePtr = context->getService(serviceRef);
+    if (!servicePtr) {
+        return CommandResult(false, "Failed to get service instance for '" + serviceInterface + "'");
+    }
+
+    // Cast to ICommandDispatcher and invoke
+    ICommandDispatcher* dispatcher = static_cast<ICommandDispatcher*>(servicePtr.get());
+    if (!dispatcher) {
+        context->ungetService(serviceRef);
+        return CommandResult(false, "Service does not implement ICommandDispatcher");
+    }
+
+    // Extract method arguments (skip service and method name)
+    std::vector<std::string> methodArgs(args.begin() + 2, args.end());
+
+    // Invoke the method
+    CommandResult result;
+    try {
+        std::string output = dispatcher->dispatchCommand(methodName, methodArgs);
+        result = CommandResult(true, output);
+    } catch (const std::exception& e) {
+        result = CommandResult(false, std::string("Method invocation failed: ") + e.what());
+    }
+
+    // Release the service
+    context->ungetService(serviceRef);
+
+    return result;
 }
 
 CommandResult CommandHandler::handleHelp(const std::vector<std::string>& args) {

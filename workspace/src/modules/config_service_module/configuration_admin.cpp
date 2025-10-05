@@ -3,6 +3,7 @@
 #include <mutex>
 #include <algorithm>
 #include <stdexcept>
+#include <sstream>
 
 namespace cdmf {
 namespace services {
@@ -187,6 +188,103 @@ bool ConfigurationAdmin::matchesFilter(const Configuration* config, const std::s
     }
 
     return config->getPid().find(filter) != std::string::npos;
+}
+
+std::string ConfigurationAdmin::dispatchCommand(const std::string& methodName,
+                                               const std::vector<std::string>& args) {
+    LOGD_FMT("Dispatching command: " << methodName << " with " << args.size() << " argument(s)");
+
+    try {
+        // createConfiguration
+        if (methodName == "createConfiguration") {
+            if (args.size() != 1) {
+                return "Error: createConfiguration requires exactly 1 argument: <pid>\n"
+                       "Usage: call cdmf::IConfigurationAdmin createConfiguration <pid>";
+            }
+
+            createConfiguration(args[0]);
+            return "Created configuration: " + args[0];
+        }
+
+        // getConfiguration
+        else if (methodName == "getConfiguration") {
+            if (args.size() != 1) {
+                return "Error: getConfiguration requires exactly 1 argument: <pid>\n"
+                       "Usage: call cdmf::IConfigurationAdmin getConfiguration <pid>";
+            }
+
+            Configuration* config = getConfiguration(args[0]);
+            if (!config) {
+                return "Error: Failed to get configuration";
+            }
+
+            std::ostringstream oss;
+            oss << "Configuration: " << config->getPid() << "\n";
+
+            auto& props = config->getProperties();
+            auto keys = props.keys();
+
+            if (keys.empty()) {
+                oss << "  (No properties set)\n";
+            } else {
+                oss << "Properties (" << keys.size() << "):\n";
+                for (const auto& key : keys) {
+                    oss << "  " << key << " = " << props.getString(key, "") << "\n";
+                }
+            }
+
+            return oss.str();
+        }
+
+        // listConfigurations
+        else if (methodName == "listConfigurations") {
+            std::string filter = args.empty() ? "" : args[0];
+
+            auto configs = listConfigurations(filter);
+
+            std::ostringstream oss;
+            oss << "Configurations (" << configs.size() << ")";
+            if (!filter.empty()) {
+                oss << " [filter: \"" << filter << "\"]";
+            }
+            oss << ":\n";
+
+            if (configs.empty()) {
+                oss << "  (No configurations found)\n";
+            } else {
+                for (auto* config : configs) {
+                    auto& props = config->getProperties();
+                    oss << "  * " << config->getPid();
+                    if (!props.keys().empty()) {
+                        oss << " (" << props.keys().size() << " properties)";
+                    }
+                    oss << "\n";
+                }
+            }
+
+            return oss.str();
+        }
+
+        // deleteConfiguration
+        else if (methodName == "deleteConfiguration") {
+            if (args.size() != 1) {
+                return "Error: deleteConfiguration requires exactly 1 argument: <pid>\n"
+                       "Usage: call cdmf::IConfigurationAdmin deleteConfiguration <pid>";
+            }
+
+            deleteConfiguration(args[0]);
+            return "Deleted configuration: " + args[0];
+        }
+
+        // Unknown method
+        else {
+            return "Error: Unknown method '" + methodName + "' for service cdmf::IConfigurationAdmin\n"
+                   "Use 'call cdmf::IConfigurationAdmin --help' to see available methods.";
+        }
+
+    } catch (const std::exception& e) {
+        return std::string("Error: ") + e.what();
+    }
 }
 
 } // namespace services
