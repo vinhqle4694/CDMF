@@ -64,7 +64,10 @@ enum class FrameworkEventType {
     // Service events
     SERVICE_REGISTERED,   ///< Service has been registered
     SERVICE_UNREGISTERED, ///< Service has been unregistered
-    SERVICE_MODIFIED      ///< Service properties modified
+    SERVICE_MODIFIED,     ///< Service properties modified
+
+    // Boot events
+    BOOT_COMPLETED        ///< All services started successfully
 };
 
 /**
@@ -87,6 +90,7 @@ inline std::string frameworkEventTypeToString(FrameworkEventType type) {
         case FrameworkEventType::SERVICE_REGISTERED:   return "SERVICE_REGISTERED";
         case FrameworkEventType::SERVICE_UNREGISTERED: return "SERVICE_UNREGISTERED";
         case FrameworkEventType::SERVICE_MODIFIED:     return "SERVICE_MODIFIED";
+        case FrameworkEventType::BOOT_COMPLETED:       return "BOOT_COMPLETED";
         default: return "UNKNOWN";
     }
 }

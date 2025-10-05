@@ -1,0 +1,21 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.hello_service",
+    "name": "Hello Service Module",
+    "version": "1.0.0",
+    "description": "Simple greeting service demonstrating CDMF module development",
+    "library": "hello_service_module.so"
+  },
+  "dependencies": [],
+  "exports": [
+    {
+      "interface": "cdmf::IHelloService",
+      "version": "1.0.0"
+    }
+  ],
+  "activator": {
+    "class": "cdmf::modules::HelloServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  }
+}

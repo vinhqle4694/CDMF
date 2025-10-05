@@ -76,10 +76,41 @@ public:
         return false;
     }
 
-    void addEventListener(IEventListener*, const EventFilter&, int, bool) override {}
-    void removeEventListener(IEventListener*) override {}
-    void fireEvent(const Event&) override {}
-    void fireEventSync(const Event&) override {}
+    void addEventListener(IEventListener* listener, const EventFilter& filter, int priority, bool synchronous) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                frameworkContext->addEventListener(listener, filter, priority, synchronous);
+            }
+        }
+    }
+
+    void removeEventListener(IEventListener* listener) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                frameworkContext->removeEventListener(listener);
+            }
+        }
+    }
+
+    void fireEvent(const Event& event) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                frameworkContext->fireEvent(event);
+            }
+        }
+    }
+
+    void fireEventSync(const Event& event) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                frameworkContext->fireEventSync(event);
+            }
+        }
+    }
     Module* installModule(const std::string&) override { return nullptr; }
     std::vector<Module*> getModules() const override { return {}; }
     Module* getModule(uint64_t) const override { return nullptr; }

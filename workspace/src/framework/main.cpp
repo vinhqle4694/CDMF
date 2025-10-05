@@ -30,6 +30,7 @@
 
 #include "core/framework.h"
 #include "core/framework_properties.h"
+#include "core/event.h"
 #include "module/module.h"
 #include "utils/properties.h"
 #include "utils/log.h"
@@ -450,6 +451,20 @@ int main(int argc, char* argv[]) {
         if (!installApplicationModules(g_framework.get())) {
             LOGW("Warning: Failed to install some application modules");
             // Continue execution
+        }
+
+        // Fire BOOT_COMPLETED event - all services started successfully
+        LOGI("All services started - firing BOOT_COMPLETED event");
+        auto context = g_framework->getContext();
+        if (context) {
+            cdmf::Event bootEvent("BOOT_COMPLETED", g_framework.get());
+            bootEvent.setProperty("eventType", static_cast<int>(cdmf::FrameworkEventType::BOOT_COMPLETED));
+            bootEvent.setProperty("message", std::string("All modules started successfully"));
+            // Use synchronous event to ensure listeners receive it before continuing
+            context->fireEventSync(bootEvent);
+            LOGI("BOOT_COMPLETED event fired successfully (synchronous)");
+        } else {
+            LOGW("Failed to get framework context - BOOT_COMPLETED event not fired");
         }
 
         // Print framework status
