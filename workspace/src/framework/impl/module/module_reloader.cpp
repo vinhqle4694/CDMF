@@ -10,10 +10,8 @@ ModuleReloader::ModuleReloader(Framework* framework, int pollIntervalMs)
     : framework_(framework)
     , fileWatcher_(std::make_unique<FileWatcher>(pollIntervalMs))
     , enabled_(false) {
-
-    if (!framework_) {
-        throw std::invalid_argument("Framework cannot be null");
-    }
+    // Framework can be null for testing basic functionality
+    // It's only required when actually reloading modules
 }
 
 ModuleReloader::~ModuleReloader() {

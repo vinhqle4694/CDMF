@@ -45,6 +45,11 @@ bool FileWatcher::watch(const std::string& path, FileChangeCallback callback) {
         return false;
     }
 
+    if (path.empty()) {
+        LOGE("FileWatcher: path cannot be empty");
+        return false;
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Check if already watching

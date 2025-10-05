@@ -146,3 +146,32 @@ add_executable(test_configuration unit/test_configuration.cpp)
 target_include_directories(test_configuration PRIVATE ${CMAKE_SOURCE_DIR}/src/modules/config_service_module)
 target_link_libraries(test_configuration PRIVATE config_service_module cdmf_core nlohmann_json::nlohmann_json GTest::gtest GTest::gtest_main)
 add_test(NAME Configuration COMMAND test_configuration)
+
+# ==============================================================================
+# Additional Comprehensive Tests
+# ==============================================================================
+
+# Circuit Breaker Tests (IPC Reliability)
+add_executable(test_circuit_breaker unit/test_circuit_breaker.cpp)
+target_link_libraries(test_circuit_breaker PRIVATE cdmf_ipc GTest::gtest GTest::gtest_main)
+add_test(NAME CircuitBreaker COMMAND test_circuit_breaker)
+
+# File Watcher Tests (Utilities)
+add_executable(test_file_watcher unit/test_file_watcher.cpp)
+target_link_libraries(test_file_watcher PRIVATE cdmf_foundation GTest::gtest GTest::gtest_main)
+add_test(NAME FileWatcher COMMAND test_file_watcher)
+
+# Version Manager Tests (Utilities)
+add_executable(test_version_manager unit/test_version_manager.cpp)
+target_link_libraries(test_version_manager PRIVATE cdmf_core GTest::gtest GTest::gtest_main)
+add_test(NAME VersionManager COMMAND test_version_manager)
+
+# Command Handler Tests (Utilities)
+add_executable(test_command_handler unit/test_command_handler.cpp)
+target_link_libraries(test_command_handler PRIVATE cdmf_foundation cdmf_core GTest::gtest GTest::gtest_main)
+add_test(NAME CommandHandler COMMAND test_command_handler)
+
+# Module Reloader Tests (Module Management)
+add_executable(test_module_reloader unit/test_module_reloader.cpp)
+target_link_libraries(test_module_reloader PRIVATE cdmf_module cdmf_foundation cdmf_core nlohmann_json::nlohmann_json GTest::gtest GTest::gtest_main)
+add_test(NAME ModuleReloader COMMAND test_module_reloader)
