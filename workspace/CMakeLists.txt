@@ -69,7 +69,7 @@ endif()
 # ==============================================================================
 
 # nlohmann/json library - using local third_party copy
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohmann_json ${CMAKE_BINARY_DIR}/nlohmann_json)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/nlohmann_json ${CMAKE_BINARY_DIR}/nlohmann_json)
 
 # ==============================================================================
 # Platform Detection
@@ -112,7 +112,7 @@ if(CDMF_BUILD_TESTS)
 
     # Google Test - using local third_party copy
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/googletest ${CMAKE_BINARY_DIR}/googletest)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest ${CMAKE_BINARY_DIR}/googletest)
 
     # Add tests subdirectory
     add_subdirectory(tests)
