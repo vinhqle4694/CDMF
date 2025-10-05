@@ -354,6 +354,10 @@ TEST_F(CommandHandlerTest, ListResultContainsModuleInfo) {
     EXPECT_TRUE(result.success);
     // Message should contain information about modules (even if none)
     EXPECT_FALSE(result.message.empty());
+    // When no framework or no modules, should have appropriate message
+    bool hasModulesMessage = (result.message.find("No modules") != std::string::npos) ||
+                             (result.message.find("Summary") != std::string::npos);
+    EXPECT_TRUE(hasModulesMessage);
 }
 
 // ============================================================================

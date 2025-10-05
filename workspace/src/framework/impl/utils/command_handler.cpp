@@ -87,7 +87,7 @@ std::string CommandHandler::getHelpText() const {
     oss << "  start <module_name>           - Start a module\n";
     oss << "  stop <module_name>            - Stop a module\n";
     oss << "  update <module_name> <path>   - Update a module to a new version\n";
-    oss << "  list                          - List all running modules\n";
+    oss << "  list                          - List all modules with status\n";
     oss << "  info <module_name>            - Show detailed module information and APIs\n";
     oss << "  help                          - Show this help message\n";
     oss << "  exit                          - Exit the command interface\n";
@@ -282,21 +282,85 @@ CommandResult CommandHandler::handleUpdate(const std::vector<std::string>& args)
 }
 
 CommandResult CommandHandler::handleList(const std::vector<std::string>& args) {
-    auto activeModules = getActiveModules();
+    if (!framework_) {
+        return CommandResult(true, "No modules installed");
+    }
 
-    if (activeModules.empty()) {
-        return CommandResult(true, "No modules are currently running");
+    auto allModules = framework_->getModules();
+
+    if (allModules.empty()) {
+        return CommandResult(true, "No modules installed");
     }
 
     std::ostringstream oss;
-    oss << "Running modules (" << activeModules.size() << "):\n";
+    oss << "Installed modules (" << allModules.size() << "):\n\n";
 
-    for (auto* module : activeModules) {
-        oss << "  - " << module->getSymbolicName()
+    // Count modules by state
+    int activeCount = 0;
+    int resolvedCount = 0;
+    int installedCount = 0;
+    int otherCount = 0;
+
+    for (auto* module : allModules) {
+        if (!module) continue;
+
+        ModuleState state = module->getState();
+        std::string stateTag;
+
+        switch (state) {
+            case ModuleState::ACTIVE:
+                stateTag = "[RUNNING]";
+                activeCount++;
+                break;
+            case ModuleState::RESOLVED:
+                stateTag = "[STOPPED]";
+                resolvedCount++;
+                break;
+            case ModuleState::INSTALLED:
+                stateTag = "[INSTALLED]";
+                installedCount++;
+                break;
+            case ModuleState::STARTING:
+                stateTag = "[STARTING]";
+                otherCount++;
+                break;
+            case ModuleState::STOPPING:
+                stateTag = "[STOPPING]";
+                otherCount++;
+                break;
+            case ModuleState::UNINSTALLED:
+                stateTag = "[UNINSTALLED]";
+                otherCount++;
+                break;
+            default:
+                stateTag = "[UNKNOWN]";
+                otherCount++;
+                break;
+        }
+
+        oss << "  " << stateTag << " "
+            << module->getSymbolicName()
             << " (v" << module->getVersion().toString() << ")"
-            << " [ID: " << module->getModuleId() << "]"
-            << " [State: " << moduleStateToString(module->getState()) << "]\n";
+            << " [ID: " << module->getModuleId() << "]";
+
+        // Show registered services count
+        auto services = module->getRegisteredServices();
+        if (!services.empty()) {
+            oss << " [Services: " << services.size() << "]";
+        }
+
+        oss << "\n";
     }
+
+    // Summary
+    oss << "\nSummary:\n";
+    oss << "  Running:    " << activeCount << "\n";
+    oss << "  Stopped:    " << resolvedCount << "\n";
+    oss << "  Installed:  " << installedCount << "\n";
+    if (otherCount > 0) {
+        oss << "  Other:      " << otherCount << "\n";
+    }
+    oss << "  Total:      " << allModules.size() << "\n";
 
     return CommandResult(true, oss.str());
 }
