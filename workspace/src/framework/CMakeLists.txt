@@ -213,6 +213,8 @@ set(CDMF_MODULE_SOURCES
     impl/module/module_impl.cpp
     impl/module/module_registry.cpp
     impl/module/module_reloader.cpp
+    impl/module/dependency_graph.cpp
+    impl/module/dependency_resolver.cpp
 )
 
 if(CDMF_BUILD_SHARED_LIBS)

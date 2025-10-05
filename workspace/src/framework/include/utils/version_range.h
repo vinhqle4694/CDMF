@@ -29,6 +29,12 @@ public:
     VersionRange();
 
     /**
+     * @brief Construct a version range from a single version (creates [version,) range)
+     * @param version Minimum version (unbounded above)
+     */
+    explicit VersionRange(const Version& version);
+
+    /**
      * @brief Construct a version range
      * @param minimum Minimum version
      * @param maximum Maximum version

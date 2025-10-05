@@ -62,6 +62,15 @@ add_executable(test_module_registry unit/test_module_registry.cpp)
 target_link_libraries(test_module_registry PRIVATE cdmf_module nlohmann_json::nlohmann_json GTest::gtest GTest::gtest_main)
 add_test(NAME ModuleRegistry COMMAND test_module_registry)
 
+# Dependency Resolution Tests (NEW)
+add_executable(test_dependency_graph unit/test_dependency_graph.cpp)
+target_link_libraries(test_dependency_graph PRIVATE cdmf_module GTest::gtest GTest::gtest_main)
+add_test(NAME DependencyGraph COMMAND test_dependency_graph)
+
+add_executable(test_dependency_resolver unit/test_dependency_resolver.cpp)
+target_link_libraries(test_dependency_resolver PRIVATE cdmf_module nlohmann_json::nlohmann_json GTest::gtest GTest::gtest_main)
+add_test(NAME DependencyResolver COMMAND test_dependency_resolver)
+
 # PHASE_5 Tests (Service Layer)
 add_executable(test_service_reference unit/test_service_reference.cpp)
 target_link_libraries(test_service_reference PRIVATE cdmf_service GTest::gtest GTest::gtest_main)

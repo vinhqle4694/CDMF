@@ -7,6 +7,7 @@
 #include "module/module_handle.h"
 #include "module/manifest_parser.h"
 #include "module/module_reloader.h"
+#include "module/dependency_resolver.h"
 #include "service/service_registry.h"
 #include "platform/platform_abstraction.h"
 #include "utils/log.h"
@@ -100,7 +101,8 @@ public:
         : properties_(properties)
         , state_(FrameworkState::CREATED)
         , stopRequested_(false)
-        , moduleReloader_(nullptr) {
+        , moduleReloader_(nullptr)
+        , dependencyResolver_(nullptr) {
 
         LOGI("Creating CDMF Framework");
     }
@@ -151,6 +153,10 @@ public:
             // Initialize module registry
             LOGI("  - Module registry");
             moduleRegistry_ = std::make_unique<ModuleRegistry>();
+
+            // Initialize dependency resolver
+            LOGI("  - Dependency resolver");
+            dependencyResolver_ = std::make_unique<DependencyResolver>(moduleRegistry_.get());
 
             // Create framework context (system module context)
             LOGI("  - Framework context");
@@ -241,6 +247,10 @@ public:
             LOGI("  - Clearing service registry");
             serviceRegistry_.reset();
 
+            // Clear dependency resolver
+            LOGI("  - Clearing dependency resolver");
+            dependencyResolver_.reset();
+
             // Clear module registry
             LOGI("  - Clearing module registry");
             moduleRegistry_.reset();
@@ -327,11 +337,35 @@ public:
 
             Module* modulePtr = module.get();
 
+            // Validate module dependencies before installation
+            if (dependencyResolver_) {
+                if (!dependencyResolver_->validateModule(modulePtr)) {
+                    auto cycles = dependencyResolver_->detectCycles();
+                    std::string cycleInfo;
+                    for (const auto& cycle : cycles) {
+                        cycleInfo += cycle.toString() + "; ";
+                    }
+                    throw std::runtime_error("Module creates circular dependency: " + cycleInfo);
+                }
+            }
+
             // Store module ownership
             modules_[moduleId] = std::move(module);
 
             // Register with module registry
             moduleRegistry_->registerModule(modulePtr);
+
+            // Rebuild dependency graph
+            if (dependencyResolver_) {
+                try {
+                    dependencyResolver_->rebuildGraph();
+                } catch (const std::exception& e) {
+                    // If dependency graph building fails, unregister the module
+                    moduleRegistry_->unregisterModule(moduleId);
+                    modules_.erase(moduleId);
+                    throw std::runtime_error(std::string("Failed to build dependency graph: ") + e.what());
+                }
+            }
 
             LOGI_FMT("Module installed: " << modulePtr->getSymbolicName()
                      << " v" << modulePtr->getVersion().toString());
@@ -423,11 +457,35 @@ public:
 
             Module* modulePtr = module.get();
 
+            // Validate module dependencies before installation
+            if (dependencyResolver_) {
+                if (!dependencyResolver_->validateModule(modulePtr)) {
+                    auto cycles = dependencyResolver_->detectCycles();
+                    std::string cycleInfo;
+                    for (const auto& cycle : cycles) {
+                        cycleInfo += cycle.toString() + "; ";
+                    }
+                    throw std::runtime_error("Module creates circular dependency: " + cycleInfo);
+                }
+            }
+
             // Store module ownership
             modules_[moduleId] = std::move(module);
 
             // Register with module registry
             moduleRegistry_->registerModule(modulePtr);
+
+            // Rebuild dependency graph
+            if (dependencyResolver_) {
+                try {
+                    dependencyResolver_->rebuildGraph();
+                } catch (const std::exception& e) {
+                    // If dependency graph building fails, unregister the module
+                    moduleRegistry_->unregisterModule(moduleId);
+                    modules_.erase(moduleId);
+                    throw std::runtime_error(std::string("Failed to build dependency graph: ") + e.what());
+                }
+            }
 
             LOGI_FMT("Module installed: " << modulePtr->getSymbolicName()
                      << " v" << modulePtr->getVersion().toString());
@@ -549,6 +607,15 @@ public:
             throw;
         }
 
+        // Rebuild dependency graph
+        if (dependencyResolver_) {
+            try {
+                dependencyResolver_->rebuildGraph();
+            } catch (const std::exception& e) {
+                LOGW_FMT("Failed to rebuild dependency graph: " << e.what());
+            }
+        }
+
         // Re-resolve dependencies after update
         if (manifest.dependencies.empty()) {
             LOGI_FMT("  Auto-resolving module (no dependencies)");
@@ -625,6 +692,15 @@ public:
         // Remove from registry
         moduleRegistry_->unregisterModule(moduleId);
 
+        // Rebuild dependency graph
+        if (dependencyResolver_) {
+            try {
+                dependencyResolver_->rebuildGraph();
+            } catch (const std::exception& e) {
+                LOGW_FMT("Failed to rebuild dependency graph after uninstall: " << e.what());
+            }
+        }
+
         // Remove from ownership storage
         modules_.erase(moduleId);
 
@@ -699,6 +775,10 @@ public:
         return moduleRegistry_.get();
     }
 
+    DependencyResolver* getDependencyResolver() {
+        return dependencyResolver_.get();
+    }
+
 private:
     /**
      * @brief Create the framework context (system module context)
@@ -708,14 +788,27 @@ private:
     }
 
     /**
-     * @brief Stop all active modules
+     * @brief Stop all active modules in reverse dependency order
      */
     void stopAllModules(int timeout_ms) {
-        auto modules = moduleRegistry_->getAllModules();
+        std::vector<Module*> modules;
 
         // Get modules in reverse dependency order (dependents stop first)
-        // For now, just stop in reverse installation order
-        std::reverse(modules.begin(), modules.end());
+        if (dependencyResolver_) {
+            try {
+                modules = dependencyResolver_->getStopOrder();
+                LOGI("Stopping modules in dependency order (dependents first)");
+            } catch (const std::exception& e) {
+                LOGW_FMT("Failed to get dependency-based stop order: " << e.what()
+                         << " - using reverse installation order");
+                modules = moduleRegistry_->getAllModules();
+                std::reverse(modules.begin(), modules.end());
+            }
+        } else {
+            // Fallback: stop in reverse installation order
+            modules = moduleRegistry_->getAllModules();
+            std::reverse(modules.begin(), modules.end());
+        }
 
         for (auto* module : modules) {
             if (module->getState() == ModuleState::ACTIVE) {
@@ -775,6 +868,7 @@ private:
     std::unique_ptr<EventDispatcher> eventDispatcher_;
     std::unique_ptr<ServiceRegistry> serviceRegistry_;
     std::unique_ptr<ModuleRegistry> moduleRegistry_;
+    std::unique_ptr<DependencyResolver> dependencyResolver_;
     std::unique_ptr<IModuleContext> frameworkContext_;
     std::unique_ptr<ModuleReloader> moduleReloader_;
 

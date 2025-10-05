@@ -13,6 +13,15 @@ VersionRange::VersionRange()
     , hasMaximum_(false) {
 }
 
+VersionRange::VersionRange(const Version& version)
+    : minimum_(version)
+    , maximum_(0, 0, 0)
+    , includeMinimum_(true)
+    , includeMaximum_(false)
+    , hasMinimum_(true)
+    , hasMaximum_(false) {
+}
+
 VersionRange::VersionRange(const Version& minimum, const Version& maximum,
                            bool includeMinimum, bool includeMaximum)
     : minimum_(minimum)
