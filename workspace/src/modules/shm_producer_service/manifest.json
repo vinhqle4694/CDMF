@@ -1,0 +1,53 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.shm.producer.service",
+    "name": "Shared Memory Producer Service Module",
+    "version": "1.0.0",
+    "library": "shm_producer_service.so",
+    "description": "Provides shared memory producer service for writing data to ring buffer",
+    "vendor": "CDMF Project",
+    "category": "ipc-service"
+  },
+
+  "dependencies": [],
+
+  "exports": [
+    {
+      "interface": "cdmf::IShmProducerService",
+      "version": "1.0.0"
+    }
+  ],
+
+  "activator": {
+    "class": "cdmf::modules::ShmProducerServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {
+    "shm.buffer.size": "1048576",
+    "shm.buffer.name": "cdmf_ring_buffer",
+    "shm.producer.timeout.ms": "1000"
+  },
+
+  "cli-methods": [
+    {
+      "interface": "cdmf::IShmProducerService",
+      "method": "getStatus",
+      "signature": "() -> string",
+      "description": "Get the current status of the producer service"
+    },
+    {
+      "interface": "cdmf::IShmProducerService",
+      "method": "getStatistics",
+      "signature": "() -> string",
+      "description": "Get producer statistics (writes, bytes, failures)"
+    },
+    {
+      "interface": "cdmf::IShmProducerService",
+      "method": "getAvailableSpace",
+      "signature": "() -> size_t",
+      "description": "Get available space in the ring buffer"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.shm.consumer.service",
+    "name": "Shared Memory Consumer Service Module",
+    "version": "1.0.0",
+    "library": "shm_consumer_service.so",
+    "description": "Provides shared memory consumer service for reading data from ring buffer",
+    "vendor": "CDMF Project",
+    "category": "ipc-service"
+  },
+
+  "dependencies": [],
+
+  "exports": [
+    {
+      "interface": "cdmf::IShmConsumerService",
+      "version": "1.0.0"
+    }
+  ],
+
+  "activator": {
+    "class": "cdmf::modules::ShmConsumerServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {
+    "shm.buffer.size": "1048576",
+    "shm.buffer.name": "cdmf_ring_buffer",
+    "shm.consumer.poll.interval.ms": "10",
+    "shm.consumer.timeout.ms": "1000"
+  },
+
+  "cli-methods": [
+    {
+      "interface": "cdmf::IShmConsumerService",
+      "method": "getStatus",
+      "signature": "() -> string",
+      "description": "Get the current status of the consumer service"
+    },
+    {
+      "interface": "cdmf::IShmConsumerService",
+      "method": "getStatistics",
+      "signature": "() -> string",
+      "description": "Get consumer statistics (reads, bytes, failures)"
+    },
+    {
+      "interface": "cdmf::IShmConsumerService",
+      "method": "getAvailableData",
+      "signature": "() -> size_t",
+      "description": "Get available data in the ring buffer"
+    }
+  ]
+}

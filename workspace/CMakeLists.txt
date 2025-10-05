@@ -103,6 +103,10 @@ add_subdirectory(src/framework)
 # Configuration Service Module
 add_subdirectory(src/modules/config_service_module)
 
+# Shared Memory Service Modules
+add_subdirectory(src/modules/shm_producer_service)
+add_subdirectory(src/modules/shm_consumer_service)
+
 # ==============================================================================
 # Unit Tests
 # ==============================================================================
@@ -178,6 +182,8 @@ message(STATUS "  - cdmf (All-in-one)")
 message(STATUS "")
 message(STATUS "Modules:")
 message(STATUS "  - config_service_module (Configuration service)")
+message(STATUS "  - shm_producer_service (Shared memory producer)")
+message(STATUS "  - shm_consumer_service (Shared memory consumer)")
 message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")
