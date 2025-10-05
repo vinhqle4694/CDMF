@@ -208,7 +208,6 @@ prefix/
 # Dependency directories
 _deps/
 external/
-third_party/
 !third_party/.gitkeep
 
 # Generated source files

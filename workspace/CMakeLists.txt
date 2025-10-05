@@ -68,19 +68,8 @@ endif()
 # Dependencies
 # ==============================================================================
 
-# nlohmann/json library
-find_package(nlohmann_json QUIET)
-if(NOT nlohmann_json_FOUND)
-    message(STATUS "nlohmann/json not found, fetching from GitHub...")
-    include(FetchContent)
-    FetchContent_Declare(
-        json
-        GIT_REPOSITORY https://github.com/nlohmann/json.git
-        GIT_TAG v3.11.3
-    )
-    FetchContent_MakeAvailable(json)
-    message(STATUS "Using the multi-header code from ${json_SOURCE_DIR}/include/")
-endif()
+# nlohmann/json library - using local third_party copy
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/nlohmann_json ${CMAKE_BINARY_DIR}/nlohmann_json)
 
 # ==============================================================================
 # Platform Detection
@@ -121,19 +110,9 @@ add_subdirectory(src/modules/config_service_module)
 if(CDMF_BUILD_TESTS)
     enable_testing()
 
-    # Google Test
-    find_package(GTest QUIET)
-    if(NOT GTest_FOUND)
-        message(STATUS "GTest not found, fetching from GitHub...")
-        include(FetchContent)
-        FetchContent_Declare(
-            googletest
-            GIT_REPOSITORY https://github.com/google/googletest.git
-            GIT_TAG v1.14.0
-        )
-        set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-        FetchContent_MakeAvailable(googletest)
-    endif()
+    # Google Test - using local third_party copy
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../third_party/googletest ${CMAKE_BINARY_DIR}/googletest)
 
     # Add tests subdirectory
     add_subdirectory(tests)
