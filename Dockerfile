@@ -62,7 +62,8 @@ RUN apt-get update && \
         clang-format \
         clang-tidy \
         cppcheck \
-        valgrind && \
+        valgrind \
+        lcov && \
     rm -rf /var/lib/apt/lists/*
 
 # Configure locale for proper character encoding
