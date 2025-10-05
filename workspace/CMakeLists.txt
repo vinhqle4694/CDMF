@@ -107,6 +107,10 @@ add_subdirectory(src/modules/config_service_module)
 add_subdirectory(src/modules/shm_producer_service)
 add_subdirectory(src/modules/shm_consumer_service)
 
+# Unix Socket Service Modules
+add_subdirectory(src/modules/unix_socket_server_service)
+add_subdirectory(src/modules/unix_socket_client_service)
+
 # ==============================================================================
 # Unit Tests
 # ==============================================================================
@@ -184,6 +188,8 @@ message(STATUS "Modules:")
 message(STATUS "  - config_service_module (Configuration service)")
 message(STATUS "  - shm_producer_service (Shared memory producer)")
 message(STATUS "  - shm_consumer_service (Shared memory consumer)")
+message(STATUS "  - unix_socket_server_service (Unix socket server)")
+message(STATUS "  - unix_socket_client_service (Unix socket client)")
 message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")

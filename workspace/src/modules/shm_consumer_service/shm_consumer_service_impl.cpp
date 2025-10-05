@@ -204,44 +204,105 @@ std::string ShmConsumerServiceImpl::getStatistics() const {
 }
 
 void ShmConsumerServiceImpl::consumerThreadFunc() {
-    LOGI("Consumer thread started");
+    LOGI("Consumer thread started - will periodically test producer APIs");
 
-    const size_t BUFFER_SIZE = 4096;
+    int test_cycle = 0;
+    const size_t BUFFER_SIZE = 256;
     std::vector<uint8_t> buffer(BUFFER_SIZE);
     int reconnect_attempts = 0;
 
     while (running_) {
         // Try to reconnect if not connected
-        if (!producer_proxy_->isConnected() && reconnect_attempts < 10) {
-            LOGI_FMT("Attempting to reconnect to producer (attempt " << (reconnect_attempts + 1) << "/10)");
-            if (producer_proxy_->connect()) {
-                LOGI("Successfully reconnected to ShmProducerService");
-                reconnect_attempts = 0;  // Reset counter on success
+        if (!producer_proxy_->isConnected()) {
+            if (reconnect_attempts < 10) {
+                LOGI_FMT("Attempting to reconnect to producer (attempt " << (reconnect_attempts + 1) << "/10)");
+                if (producer_proxy_->connect()) {
+                    LOGI("Successfully reconnected to ShmProducerService");
+                    reconnect_attempts = 0;  // Reset counter on success
+                } else {
+                    reconnect_attempts++;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    continue;
+                }
             } else {
-                reconnect_attempts++;
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                LOGI("Waiting for producer connection...");
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                reconnect_attempts = 0;  // Reset and try again
                 continue;
             }
         }
 
-        size_t bytes_read = 0;
+        test_cycle++;
+        LOGI_FMT("\n========== SHM Test Cycle " << test_cycle << " ==========");
 
-        // Try to read data
-        if (read(buffer.data(), BUFFER_SIZE, bytes_read)) {
-            if (bytes_read > 0) {
-                // Invoke callback if registered
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (data_callback_) {
-                    data_callback_(buffer.data(), bytes_read);
-                }
+        // Test 1: Call write method (via producer proxy)
+        {
+            std::string test_data = "SHM test data from consumer cycle " + std::to_string(test_cycle);
+            LOGI_FMT("1. Calling producer's write with: \"" << test_data << "\"");
+
+            std::vector<uint8_t> request(test_data.begin(), test_data.end());
+            auto result = producer_proxy_->call("write", request, 1000);
+
+            if (result.success && result.data.size() > 0 && result.data[0] == 1) {
+                LOGI("   ✓ write succeeded");
             } else {
-                // No data available, sleep briefly
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                LOGE("   ✗ write failed");
             }
-        } else {
-            // Read error, sleep before retry
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Test 2: Get available space
+        {
+            LOGI("2. Calling getAvailableSpace");
+            std::vector<uint8_t> empty;
+            auto result = producer_proxy_->call("getAvailableSpace", empty, 1000);
+
+            if (result.success && result.data.size() >= sizeof(size_t)) {
+                size_t available;
+                std::memcpy(&available, result.data.data(), sizeof(size_t));
+                LOGI_FMT("   ✓ Available space: " << available << " bytes");
+            } else {
+                LOGE("   ✗ getAvailableSpace failed");
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Test 3: Get producer status
+        {
+            LOGI("3. Calling getStatus");
+            std::vector<uint8_t> empty;
+            auto result = producer_proxy_->call("getStatus", empty, 1000);
+
+            if (result.success) {
+                std::string status(result.data.begin(), result.data.end());
+                LOGI_FMT("   ✓ Producer status: " << status);
+            } else {
+                LOGE("   ✗ getStatus failed");
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+        // Test 4: Get producer statistics
+        {
+            LOGI("4. Calling getStatistics");
+            std::vector<uint8_t> empty;
+            auto result = producer_proxy_->call("getStatistics", empty, 1000);
+
+            if (result.success) {
+                std::string stats(result.data.begin(), result.data.end());
+                LOGI_FMT("   ✓ Producer statistics:\n" << stats);
+            } else {
+                LOGE("   ✗ getStatistics failed");
+            }
+        }
+
+        LOGI("========== SHM Test Cycle Complete ==========\n");
+
+        // Wait 3 seconds before next test cycle
+        std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 
     LOGI("Consumer thread stopped");

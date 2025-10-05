@@ -1,0 +1,47 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.unix.socket.server.service",
+    "name": "Unix Socket Server Service Module",
+    "version": "1.0.0",
+    "library": "unix_socket_server_service.so",
+    "description": "Provides Unix socket server service for processing client requests",
+    "vendor": "CDMF Project",
+    "category": "ipc-service"
+  },
+
+  "dependencies": [],
+
+  "exports": [
+    {
+      "interface": "cdmf::IUnixSocketServerService",
+      "version": "1.0.0"
+    }
+  ],
+
+  "activator": {
+    "class": "cdmf::modules::UnixSocketServerServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {
+    "socket.path": "/tmp/cdmf_unix_socket_server.sock",
+    "server.timeout.ms": "5000",
+    "max.concurrent.requests": "100"
+  },
+
+  "cli-methods": [
+    {
+      "interface": "cdmf::IUnixSocketServerService",
+      "method": "getStatus",
+      "signature": "() -> string",
+      "description": "Get the current status of the server service"
+    },
+    {
+      "interface": "cdmf::IUnixSocketServerService",
+      "method": "getStatistics",
+      "signature": "() -> string",
+      "description": "Get server statistics (requests, bytes, failures)"
+    }
+  ]
+}

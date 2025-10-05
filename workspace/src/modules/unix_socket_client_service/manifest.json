@@ -1,0 +1,59 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.unix.socket.client.service",
+    "name": "Unix Socket Client Service Module",
+    "version": "1.0.0",
+    "library": "unix_socket_client_service.so",
+    "description": "Provides Unix socket client service for sending requests to server",
+    "vendor": "CDMF Project",
+    "category": "ipc-service"
+  },
+
+  "dependencies": [],
+
+  "exports": [
+    {
+      "interface": "cdmf::IUnixSocketClientService",
+      "version": "1.0.0"
+    }
+  ],
+
+  "activator": {
+    "class": "cdmf::modules::UnixSocketClientServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+
+  "properties": {
+    "socket.path": "/tmp/cdmf_unix_socket_server.sock",
+    "client.timeout.ms": "5000",
+    "auto.reconnect": "true"
+  },
+
+  "cli-methods": [
+    {
+      "interface": "cdmf::IUnixSocketClientService",
+      "method": "getStatus",
+      "signature": "() -> string",
+      "description": "Get the current status of the client service"
+    },
+    {
+      "interface": "cdmf::IUnixSocketClientService",
+      "method": "getStatistics",
+      "signature": "() -> string",
+      "description": "Get client statistics (requests, bytes, failures)"
+    },
+    {
+      "interface": "cdmf::IUnixSocketClientService",
+      "method": "getRemoteStatus",
+      "signature": "() -> string",
+      "description": "Get the remote server status"
+    },
+    {
+      "interface": "cdmf::IUnixSocketClientService",
+      "method": "getRemoteStatistics",
+      "signature": "() -> string",
+      "description": "Get the remote server statistics"
+    }
+  ]
+}
