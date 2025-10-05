@@ -71,12 +71,16 @@ bool ServiceStub::start() {
         return false;
     }
 
-    // Connect transport to enable message exchange
-    LOGD_FMT("Connecting transport");
-    auto connect_result = transport_->connect();
-    if (!connect_result.success()) {
-        LOGE_FMT("Transport connect failed: " << connect_result.error_message);
-        return false;
+    // Connect transport to enable message exchange (skip if already connected in server mode)
+    if (!transport_->isConnected()) {
+        LOGD_FMT("Connecting transport");
+        auto connect_result = transport_->connect();
+        if (!connect_result.success()) {
+            LOGE_FMT("Transport connect failed: " << connect_result.error_message);
+            return false;
+        }
+    } else {
+        LOGD_FMT("Transport already connected (server mode)");
     }
 
     // Set up message callback for async message reception
