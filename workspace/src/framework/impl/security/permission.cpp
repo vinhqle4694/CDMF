@@ -79,17 +79,17 @@ Permission::Permission(PermissionType type, const std::string& target, Permissio
 }
 
 PermissionType Permission::getType() const {
-    LOGD_FMT("Permission::getType() -> " << permissionTypeToString(type_));
+    LOGV_FMT("Permission::getType() -> " << permissionTypeToString(type_));
     return type_;
 }
 
 std::string Permission::getTarget() const {
-    LOGD_FMT("Permission::getTarget() -> " << target_);
+    LOGV_FMT("Permission::getTarget() -> " << target_);
     return target_;
 }
 
 PermissionAction Permission::getAction() const {
-    LOGD_FMT("Permission::getAction() -> " << permissionActionToString(action_));
+    LOGV_FMT("Permission::getAction() -> " << permissionActionToString(action_));
     return action_;
 }
 
@@ -162,7 +162,7 @@ bool Permission::wildcardMatch(const std::string& pattern, const std::string& ta
 std::string Permission::toString() const {
     std::string result = permissionTypeToString(type_) + ":" + target_ + ":" +
            permissionActionToString(action_);
-    LOGD_FMT("Permission::toString() -> " << result);
+    LOGV_FMT("Permission::toString() -> " << result);
     return result;
 }
 
@@ -283,13 +283,13 @@ void PermissionCollection::clear() {
 }
 
 size_t PermissionCollection::size() const {
-    LOGD_FMT("PermissionCollection::size() -> " << permissions_.size());
+    LOGV_FMT("PermissionCollection::size() -> " << permissions_.size());
     return permissions_.size();
 }
 
 bool PermissionCollection::empty() const {
     bool isEmpty = permissions_.empty();
-    LOGD_FMT("PermissionCollection::empty() -> " << (isEmpty ? "true" : "false"));
+    LOGV_FMT("PermissionCollection::empty() -> " << (isEmpty ? "true" : "false"));
     return isEmpty;
 }
 

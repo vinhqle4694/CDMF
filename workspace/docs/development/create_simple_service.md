@@ -800,7 +800,8 @@ extern "C" {
     "name": "Hello Service Module",
     "version": "1.0.0",
     "description": "Simple greeting service demonstrating CDMF module development",
-    "library": "hello_service_module.so"
+    "library": "hello_service_module.so",
+    "auto-start": true
   },
   "dependencies": [],
   "exports": [
@@ -826,7 +827,8 @@ extern "C" {
   "name": "Hello Service Module",
   "version": "1.0.0",
   "description": "Simple greeting service demonstrating CDMF module development",
-  "library": "hello_service_module.so"
+  "library": "hello_service_module.so",
+  "auto-start": true
 }
 ```
 
@@ -860,6 +862,15 @@ extern "C" {
   - **macOS:** `"hello_service_module.dylib"`
   - **Purpose:** Framework loads this library file
   - **Path:** Relative to library directory (e.g., `./lib/`)
+
+- **`auto-start`**: Whether to automatically start the module when framework boots
+  - **Type:** Boolean (true/false)
+  - **Default:** `false` (if omitted)
+  - **Purpose:** Controls module lifecycle during framework startup
+  - **`true`:** Module automatically transitions from INSTALLED → RESOLVED → ACTIVE when framework starts
+  - **`false`:** Module remains in RESOLVED state and must be manually started
+  - **Example:** `"auto-start": true`
+  - **Note:** Most service modules should use `true` to make services available immediately
 
 #### Dependencies Section:
 ```json
@@ -951,7 +962,8 @@ extern "C" {
     "symbolic-name": "cdmf.my_module",
     "name": "My Module",
     "version": "1.0.0",
-    "library": "my_module.so"
+    "library": "my_module.so",
+    "auto-start": true
   },
   "dependencies": [
     {

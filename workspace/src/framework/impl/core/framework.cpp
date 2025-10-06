@@ -10,6 +10,10 @@
 #include "module/dependency_resolver.h"
 #include "service/service_registry.h"
 #include "platform/platform_abstraction.h"
+#include "security/permission_manager.h"
+#include "security/permission.h"
+#include "security/permission_types.h"
+#include "security/sandbox_manager.h"
 #include "utils/log.h"
 #include <stdexcept>
 #include <algorithm>
@@ -504,6 +508,12 @@ public:
             LOGI_FMT("Module installed: " << modulePtr->getSymbolicName()
                      << " v" << modulePtr->getVersion().toString());
 
+            // Grant permissions from manifest
+            grantModulePermissions(modulePtr, manifest);
+
+            // Apply sandbox configuration from manifest
+            applySandboxConfiguration(modulePtr, manifest);
+
             // Resolve module dependencies
             if (manifest.dependencies.empty()) {
                 LOGI_FMT("  Auto-resolving module (no dependencies)");
@@ -875,6 +885,178 @@ private:
             } catch (const std::exception& e) {
                 LOGE_FMT("Framework listener threw exception: " << e.what());
             }
+        }
+    }
+
+    /**
+     * @brief Grant permissions from module manifest to the module
+     */
+    void grantModulePermissions(Module* module, const ModuleManifest& manifest) {
+        if (!module) {
+            return;
+        }
+
+        // Check if manifest has security section with permissions
+        const auto& json = manifest.rawJson;
+        if (!json.contains("security") || !json["security"].contains("permissions")) {
+            LOGI_FMT("  No security permissions defined in manifest");
+            return;
+        }
+
+        auto& permMgr = security::PermissionManager::getInstance();
+        std::string moduleId = module->getSymbolicName();
+        const auto& permissions = json["security"]["permissions"];
+
+        LOGI_FMT("  Granting " << permissions.size() << " permission(s) to module: " << moduleId);
+
+        for (const auto& permJson : permissions) {
+            try {
+                // Extract permission type and target
+                std::string typeStr = permJson["type"].get<std::string>();
+                std::string target = permJson.value("target", "*");
+
+                // Convert string to PermissionType enum
+                security::PermissionType permType = security::stringToPermissionType(typeStr);
+
+                // Create permission and grant it
+                auto permission = std::make_shared<security::Permission>(
+                    permType,
+                    target,
+                    security::PermissionAction::GRANT
+                );
+
+                if (permMgr.grantPermission(moduleId, permission)) {
+                    LOGI_FMT("    ✓ Granted: " << typeStr << " for target: " << target);
+                } else {
+                    LOGW_FMT("    ✗ Failed to grant: " << typeStr << " for target: " << target);
+                }
+            } catch (const std::exception& e) {
+                LOGW_FMT("    ✗ Error granting permission: " << e.what());
+            }
+        }
+    }
+
+    /**
+     * @brief Apply sandbox configuration from module manifest
+     */
+    void applySandboxConfiguration(Module* module, const ModuleManifest& manifest) {
+        if (!module) {
+            return;
+        }
+
+        // Check if manifest has security section with sandbox
+        const auto& json = manifest.rawJson;
+        if (!json.contains("security") || !json["security"].contains("sandbox")) {
+            LOGI_FMT("  No sandbox configuration defined in manifest");
+            return;
+        }
+
+        const auto& sandboxJson = json["security"]["sandbox"];
+
+        // Check if sandbox is enabled
+        bool sandboxEnabled = sandboxJson.value("enabled", false);
+        if (!sandboxEnabled) {
+            LOGI_FMT("  Sandbox disabled in manifest");
+            return;
+        }
+
+        auto& sandboxMgr = security::SandboxManager::getInstance();
+        std::string moduleId = module->getSymbolicName();
+
+        try {
+            // Parse sandbox configuration
+            security::SandboxConfig config;
+
+            // Get sandbox type
+            std::string typeStr = sandboxJson.value("type", "PROCESS");
+            if (typeStr == "PROCESS") {
+                config.type = security::SandboxType::PROCESS;
+            } else if (typeStr == "NAMESPACE") {
+                config.type = security::SandboxType::NAMESPACE;
+            } else if (typeStr == "CONTAINER") {
+                config.type = security::SandboxType::CONTAINER;
+            } else if (typeStr == "SECCOMP") {
+                config.type = security::SandboxType::SECCOMP;
+            } else if (typeStr == "APPARMOR") {
+                config.type = security::SandboxType::APPARMOR;
+            } else if (typeStr == "SELINUX") {
+                config.type = security::SandboxType::SELINUX;
+            } else {
+                config.type = security::SandboxType::NONE;
+            }
+
+            // Parse config section if it exists
+            if (sandboxJson.contains("config")) {
+                const auto& configJson = sandboxJson["config"];
+
+                config.allowNetworkAccess = configJson.value("allowNetworkAccess", false);
+                config.allowFileSystemAccess = configJson.value("allowFileSystemAccess", false);
+
+                // Parse allowed paths
+                if (configJson.contains("allowedPaths")) {
+                    for (const auto& path : configJson["allowedPaths"]) {
+                        config.allowedPaths.push_back(path.get<std::string>());
+                    }
+                }
+
+                // Parse allowed syscalls
+                if (configJson.contains("allowedSyscalls")) {
+                    for (const auto& syscall : configJson["allowedSyscalls"]) {
+                        config.allowedSyscalls.push_back(syscall.get<std::string>());
+                    }
+                }
+
+                // Parse allowed IPs
+                if (configJson.contains("allowedIPs")) {
+                    for (const auto& ip : configJson["allowedIPs"]) {
+                        config.allowedIPs.push_back(ip.get<std::string>());
+                    }
+                }
+
+                // Parse resource limits
+                config.maxMemoryMB = configJson.value("maxMemoryMB", 256);
+                config.maxCPUPercent = configJson.value("maxCPUPercent", 50);
+                config.maxFileDescriptors = configJson.value("maxFileDescriptors", 256);
+                config.maxThreads = configJson.value("maxThreads", 10);
+
+                // Parse security profiles
+                config.apparmorProfile = configJson.value("apparmorProfile", "");
+                config.selinuxContext = configJson.value("selinuxContext", "");
+            }
+
+            // Create sandbox
+            LOGI_FMT("  Creating sandbox for module: " << moduleId);
+            LOGI_FMT("    Type: " << typeStr);
+            LOGI_FMT("    Network access: " << (config.allowNetworkAccess ? "allowed" : "denied"));
+            LOGI_FMT("    File system access: " << (config.allowFileSystemAccess ? "allowed" : "denied"));
+            LOGI_FMT("    Max memory: " << config.maxMemoryMB << " MB");
+            LOGI_FMT("    Max CPU: " << config.maxCPUPercent << "%");
+            LOGI_FMT("    Max file descriptors: " << config.maxFileDescriptors);
+            LOGI_FMT("    Max threads: " << config.maxThreads);
+
+            if (!config.allowedPaths.empty()) {
+                LOGI_FMT("    Allowed paths: " << config.allowedPaths.size());
+                for (const auto& path : config.allowedPaths) {
+                    LOGI_FMT("      - " << path);
+                }
+            }
+
+            std::string sandboxId = sandboxMgr.createSandbox(moduleId, config);
+            if (!sandboxId.empty()) {
+                LOGI_FMT("    ✓ Sandbox created: " << sandboxId);
+
+                // Start the sandbox
+                if (sandboxMgr.startSandbox(sandboxId)) {
+                    LOGI_FMT("    ✓ Sandbox started successfully");
+                } else {
+                    LOGW_FMT("    ✗ Failed to start sandbox");
+                }
+            } else {
+                LOGW_FMT("    ✗ Failed to create sandbox");
+            }
+
+        } catch (const std::exception& e) {
+            LOGW_FMT("  ✗ Error applying sandbox configuration: " << e.what());
         }
     }
 
