@@ -855,7 +855,7 @@ void UnixSocketTransport::removeClient(int fd) {
 void UnixSocketTransport::setState(TransportState new_state) {
     TransportState old_state = state_.exchange(new_state);
     if (old_state != new_state) {
-        LOGI_FMT("State changed: " << static_cast<int>(old_state) << " -> " << static_cast<int>(new_state));
+        LOGV_FMT("State changed: " << static_cast<int>(old_state) << " -> " << static_cast<int>(new_state));
         if (state_callback_) {
             state_callback_(old_state, new_state);
         }
