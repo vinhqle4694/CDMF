@@ -1,15 +1,20 @@
 #include "security/sandbox_manager.h"
+#include "security/sandbox_ipc.h"
+#include "security/sandbox_module_loader.h"
 #include "utils/log.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <random>
+#include <cstring>
 
 // Platform-specific includes
 #ifdef __linux__
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <linux/seccomp.h>
 #include <sys/syscall.h>
@@ -54,7 +59,25 @@ SandboxManager::SandboxManager() : pImpl_(std::make_unique<Impl>()) {
              << "MB, max_cpu=" << pImpl_->defaultConfig.maxCPUPercent << "%");
 }
 
-SandboxManager::~SandboxManager() = default;
+SandboxManager::~SandboxManager() {
+    LOGI("SandboxManager destructor: stopping all sandboxes");
+
+    // Get list of sandbox IDs before iterating (avoid iterator invalidation)
+    std::vector<std::string> sandboxIds;
+    {
+        std::lock_guard<std::mutex> lock(pImpl_->mutex);
+        for (const auto& pair : pImpl_->sandboxes) {
+            sandboxIds.push_back(pair.first);
+        }
+    }
+
+    // Stop each sandbox (releases lock during stopSandbox call)
+    for (const auto& sandboxId : sandboxIds) {
+        stopSandbox(sandboxId);
+    }
+
+    LOGI("SandboxManager destructor: all sandboxes stopped");
+}
 
 // ========== Sandbox Lifecycle ==========
 
@@ -88,6 +111,10 @@ std::string SandboxManager::createSandbox(const std::string& moduleId,
     info->createdTime = std::chrono::system_clock::now().time_since_epoch().count();
     info->terminatedTime = 0;
 
+    // Store sandbox info BEFORE calling setup (so setupProcessSandbox can access it)
+    pImpl_->sandboxes[sandboxId] = info;
+    pImpl_->moduleSandboxMap[moduleId] = sandboxId;
+
     // Setup sandbox based on type
     bool setupSuccess = false;
     switch (config.type) {
@@ -116,10 +143,6 @@ std::string SandboxManager::createSandbox(const std::string& moduleId,
         info->status = SandboxStatus::ERROR;
         info->errorMessage = "Failed to setup sandbox";
     }
-
-    // Store sandbox info
-    pImpl_->sandboxes[sandboxId] = info;
-    pImpl_->moduleSandboxMap[moduleId] = sandboxId;
 
     LOGI_FMT("Sandbox created successfully: " << sandboxId << " for module " << moduleId
              << " (type: " << static_cast<int>(config.type) << ", status: " << static_cast<int>(info->status) << ")");
@@ -187,8 +210,49 @@ bool SandboxManager::stopSandbox(const std::string& sandboxId) {
         return false;
     }
 
-    it->second->status = SandboxStatus::TERMINATED;
-    it->second->terminatedTime = std::chrono::system_clock::now().time_since_epoch().count();
+    auto& info = it->second;
+
+    // Send SHUTDOWN command to child process if IPC is available
+    if (info->ipc && info->ipc->isConnected()) {
+        LOGI_FMT("Sending SHUTDOWN command to sandbox: " << sandboxId);
+
+        SandboxMessage shutdownMsg;
+        shutdownMsg.type = SandboxMessageType::SHUTDOWN;
+        shutdownMsg.moduleId = info->moduleId;
+        shutdownMsg.requestId = 0;
+        shutdownMsg.errorCode = 0;
+
+        if (!info->ipc->sendMessage(shutdownMsg, 1000)) {
+            LOGW_FMT("Failed to send SHUTDOWN command to sandbox: " << sandboxId);
+        } else {
+            LOGI_FMT("SHUTDOWN command sent successfully to sandbox: " << sandboxId);
+        }
+
+        // Give child time to exit gracefully (500ms)
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+
+#ifdef __linux__
+    // Kill the process if it's still running
+    if (info->processId > 0) {
+        LOGI_FMT("Terminating child process: PID=" << info->processId);
+        kill(info->processId, SIGTERM);
+
+        // Wait briefly for termination
+        int status;
+        pid_t result = waitpid(info->processId, &status, WNOHANG);
+        if (result == 0) {
+            // Still running, force kill
+            LOGW_FMT("Child process didn't exit gracefully, force killing: PID=" << info->processId);
+            kill(info->processId, SIGKILL);
+            waitpid(info->processId, &status, 0);
+        }
+        LOGI_FMT("Child process terminated: PID=" << info->processId);
+    }
+#endif
+
+    info->status = SandboxStatus::TERMINATED;
+    info->terminatedTime = std::chrono::system_clock::now().time_since_epoch().count();
     LOGI_FMT("Sandbox stopped: " << sandboxId);
     return true;
 }
@@ -353,25 +417,169 @@ std::string SandboxManager::generateSandboxId() {
 
 bool SandboxManager::setupProcessSandbox(const std::string& sandboxId,
                                         const SandboxConfig& config) {
-    LOGD_FMT("Setting up process sandbox: " << sandboxId << " with memory=" << config.maxMemoryMB << "MB");
-    // Process-level sandboxing
-    // In production, this would:
-    // 1. Fork a new process
-    // 2. Set resource limits (RLIMIT_AS, RLIMIT_CPU, etc.)
-    // 3. Drop privileges
-    // 4. Set up IPC channels
+    LOGD_FMT("Setting up process sandbox: " << sandboxId
+             << " with memory=" << config.maxMemoryMB << "MB");
 
-#ifdef __linux__
-    // Example: Set resource limits
-    struct rlimit limit;
-    limit.rlim_cur = config.maxMemoryMB * 1024 * 1024;
-    limit.rlim_max = config.maxMemoryMB * 1024 * 1024;
-    // setrlimit(RLIMIT_AS, &limit); // Would be called in child process
-    LOGD_FMT("  Process sandbox resource limits configured for: " << sandboxId);
-#endif
+#ifndef __linux__
+    LOGW("Process sandboxing only supported on Linux");
+    return false;
+#else
 
-    LOGD_FMT("Process sandbox setup completed for: " << sandboxId);
+    // 1. Determine transport type from config properties (default: shared_memory)
+    ipc::TransportType transportType = ipc::TransportType::SHARED_MEMORY;
+
+    auto it = config.properties.find("ipc_transport");
+    if (it != config.properties.end()) {
+        const std::string& transportStr = it->second;
+        if (transportStr == "unix_socket") {
+            transportType = ipc::TransportType::UNIX_SOCKET;
+        } else if (transportStr == "tcp") {
+            transportType = ipc::TransportType::TCP_SOCKET;
+        } else if (transportStr == "shared_memory") {
+            transportType = ipc::TransportType::SHARED_MEMORY;
+        } else {
+            LOGW_FMT("Unknown transport type: " << transportStr << ", using shared_memory");
+        }
+    }
+
+    LOGI_FMT("Using IPC transport: " << ipc::transportTypeToString(transportType));
+
+    // 2. Create transport configuration from properties
+    ipc::TransportConfig transportConfig = createSandboxTransportConfig(
+        transportType, sandboxId, SandboxIPC::Role::PARENT, config.properties);
+
+    // 3. Create transport strategy
+    auto transport = createSandboxTransport(transportType, sandboxId);
+
+    // 4. Create SandboxIPC with injected transport strategy
+    auto ipc = std::make_unique<SandboxIPC>(SandboxIPC::Role::PARENT, sandboxId,
+                                            std::move(transport));
+
+    // Initialize transport before fork (so it exists for child to connect)
+    if (!ipc->initialize(transportConfig)) {
+        LOGE("Failed to initialize IPC channel");
+        return false;
+    }
+
+    // 5. Fork process
+    pid_t pid = fork();
+
+    if (pid < 0) {
+        // Fork failed
+        LOGE_FMT("Fork failed: " << strerror(errno));
+        return false;
+    }
+
+    if (pid == 0) {
+        // ===== CHILD PROCESS =====
+
+        // STEP 1: Create and connect IPC WHILE STILL ROOT
+        // This is critical - connection must happen before dropping privileges
+        // Works for ALL transport types (shared memory, sockets, TCP, etc.)
+
+        LOGI_FMT("Child process connecting to IPC: sandbox=" << sandboxId
+                 << ", transport=" << ipc::transportTypeToString(transportType));
+
+        // Create child transport configuration
+        ipc::TransportConfig childTransportConfig = createSandboxTransportConfig(
+            transportType, sandboxId, SandboxIPC::Role::CHILD, config.properties);
+
+        // Create child transport strategy
+        auto childTransport = createSandboxTransport(transportType, sandboxId);
+
+        // Create child SandboxIPC
+        auto childIpc = std::make_unique<SandboxIPC>(SandboxIPC::Role::CHILD, sandboxId,
+                                                      std::move(childTransport));
+
+        // Connect to parent's IPC endpoint (requires root privileges)
+        if (!childIpc->initialize(childTransportConfig)) {
+            LOGE("Child failed to connect to IPC channel");
+            exit(1);
+        }
+
+        LOGI_FMT("Child IPC connected successfully: endpoint=" << childIpc->getEndpoint());
+
+        // STEP 1.5: Send initial heartbeat to parent ASAP to trigger accept()
+        // Do this before dropping privileges to ensure it succeeds quickly
+        {
+            SandboxMessage heartbeat;
+            heartbeat.type = SandboxMessageType::HEARTBEAT;
+            heartbeat.moduleId = "";
+            heartbeat.requestId = 0;
+            heartbeat.errorCode = 0;
+            if (childIpc->sendMessage(heartbeat, 1000)) {
+                LOGI_FMT("Child sent initial heartbeat to parent");
+            } else {
+                LOGW_FMT("Child failed to send initial heartbeat");
+            }
+        }
+
+        // STEP 2: Drop privileges AFTER IPC connection established
+        // Now safe to drop - IPC already connected
+        if (!dropPrivileges()) {
+            LOGE("Failed to drop privileges");
+            exit(1);
+        }
+
+        // STEP 3: Set resource limits
+        if (!setResourceLimits(config)) {
+            LOGE("Failed to set resource limits in child process");
+            exit(1);
+        }
+
+        // STEP 4: Run sandboxed module loader with pre-connected IPC
+        // This blocks until shutdown
+        int exitCode = SandboxModuleLoader::runSandboxedProcess(sandboxId,
+                                                                std::move(childIpc));
+
+        exit(exitCode);
+    }
+
+    // ===== PARENT PROCESS =====
+
+    // For Unix socket SERVER mode, we need to wait for the child to connect
+    // The child connects immediately after fork, so we trigger the accept() by receiving
+    if (transportType == ipc::TransportType::UNIX_SOCKET) {
+        LOGI_FMT("Parent waiting for child connection on Unix socket...");
+
+        // Give child brief time to at least start connecting
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        // Wait for child to connect and send initial heartbeat
+        // receiveMessage() with timeout will run the epoll loop and trigger accept()
+        SandboxMessage msg;
+        bool childConnected = false;
+
+        // Child needs time to: connect, drop privileges, set limits, send heartbeat
+        // Use longer timeout to be safe
+        if (ipc->receiveMessage(msg, 5000)) {  // 5 second timeout
+            LOGI_FMT("Parent accepted child connection and received message (type="
+                     << static_cast<int>(msg.type) << ")");
+            childConnected = true;
+        } else {
+            LOGW_FMT("Parent did not receive initial message from child within timeout");
+        }
+
+        if (childConnected) {
+            LOGI_FMT("Parent Unix socket connection established with child");
+        } else {
+            LOGW_FMT("Parent-child Unix socket connection may not be fully established");
+        }
+    }
+
+    // Store sandbox info with IPC channel and transport type
+    // IMPORTANT: Use reference to modify the actual shared_ptr in the map
+    auto& info = pImpl_->sandboxes[sandboxId];
+    info->processId = pid;
+    info->ipc = std::move(ipc);  // Transfer ownership to sandbox info
+    info->transportType = transportType;  // Store for reference
+
+    LOGI_FMT("Process sandbox created: PID=" << pid << ", sandbox=" << sandboxId
+             << ", transport=" << ipc::transportTypeToString(transportType)
+             << ", endpoint=" << info->ipc->getEndpoint());
     return true;
+
+#endif // __linux__
 }
 
 bool SandboxManager::setupNamespaceSandbox(const std::string& sandboxId,
@@ -445,6 +653,58 @@ bool SandboxManager::applySELinuxContext(const std::string& sandboxId,
 
     LOGD_FMT("SELinux context '" << context << "' applied successfully for sandbox: " << sandboxId);
     return true;
+}
+
+bool SandboxManager::setResourceLimits(const SandboxConfig& config) {
+#ifdef __linux__
+    struct rlimit limit;
+
+    // Memory limit (virtual address space)
+    limit.rlim_cur = config.maxMemoryMB * 1024ULL * 1024ULL;
+    limit.rlim_max = config.maxMemoryMB * 1024ULL * 1024ULL;
+    if (setrlimit(RLIMIT_AS, &limit) != 0) {
+        LOGE_FMT("Failed to set RLIMIT_AS: " << strerror(errno));
+        return false;
+    }
+
+    // File descriptor limit
+    limit.rlim_cur = config.maxFileDescriptors;
+    limit.rlim_max = config.maxFileDescriptors;
+    if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
+        LOGE_FMT("Failed to set RLIMIT_NOFILE: " << strerror(errno));
+        return false;
+    }
+
+    // CPU time limit (soft limit in seconds)
+    // Note: This is per-second CPU time, not real-time
+    limit.rlim_cur = config.maxCPUPercent;
+    limit.rlim_max = config.maxCPUPercent;
+    if (setrlimit(RLIMIT_CPU, &limit) != 0) {
+        LOGE_FMT("Failed to set RLIMIT_CPU: " << strerror(errno));
+        return false;
+    }
+
+    LOGI("Resource limits set successfully");
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SandboxManager::dropPrivileges() {
+#ifdef __linux__
+    // Drop to nobody user (UID 65534) if running as root
+    if (getuid() == 0) {
+        if (setgid(65534) != 0 || setuid(65534) != 0) {
+            LOGE_FMT("Failed to drop privileges: " << strerror(errno));
+            return false;
+        }
+        LOGI("Dropped privileges to nobody user");
+    }
+    return true;
+#else
+    return false;
+#endif
 }
 
 } // namespace security

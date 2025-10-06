@@ -100,9 +100,6 @@ add_subdirectory(src/framework)
 # Modules
 # ==============================================================================
 
-# Hello Service Module - Simple greeting service example
-add_subdirectory(src/modules/hello_service_module)
-
 # ==============================================================================
 # Unit Tests
 # ==============================================================================
@@ -177,7 +174,6 @@ message(STATUS "  - cdmf_security (Security subsystem)")
 message(STATUS "  - cdmf (All-in-one)")
 message(STATUS "")
 message(STATUS "Modules:")
-message(STATUS "  - hello_service_module (Simple greeting service example)")
 message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")

@@ -1022,6 +1022,13 @@ private:
                 // Parse security profiles
                 config.apparmorProfile = configJson.value("apparmorProfile", "");
                 config.selinuxContext = configJson.value("selinuxContext", "");
+
+                // Parse properties map (for IPC transport configuration)
+                if (configJson.contains("properties") && configJson["properties"].is_object()) {
+                    for (auto it = configJson["properties"].begin(); it != configJson["properties"].end(); ++it) {
+                        config.properties[it.key()] = it.value().get<std::string>();
+                    }
+                }
             }
 
             // Create sandbox

@@ -6,6 +6,13 @@
 #include <memory>
 #include <map>
 #include <mutex>
+#include "ipc/transport.h"
+
+// Platform-specific includes
+#ifdef __linux__
+#include <sys/types.h>
+#include <unistd.h>
+#endif
 
 namespace cdmf {
 
@@ -58,7 +65,22 @@ struct SandboxConfig {
     uint32_t maxThreads = 10;
     std::string apparmorProfile;
     std::string selinuxContext;
+
+    /**
+     * @brief Additional properties for configuring sandbox behavior
+     *
+     * Common properties:
+     * - ipc_transport: Transport type ("shared_memory", "unix_socket", "tcp")
+     * - ipc_buffer_size: Ring buffer capacity (default: "4096")
+     * - ipc_shm_size: Shared memory size in bytes (default: "4194304" = 4MB)
+     * - ipc_endpoint: Custom endpoint (for TCP transport)
+     * - ipc_timeout_ms: Send/receive timeout in milliseconds (default: "5000")
+     */
+    std::map<std::string, std::string> properties;
 };
+
+// Forward declaration
+class SandboxIPC;
 
 /**
  * @struct SandboxInfo
@@ -73,6 +95,11 @@ struct SandboxInfo {
     uint64_t createdTime;
     uint64_t terminatedTime;
     std::string errorMessage;
+
+    // Process sandbox specific fields
+    pid_t processId = -1;                              ///< Child process ID (for PROCESS sandbox)
+    std::unique_ptr<SandboxIPC> ipc;                   ///< IPC channel to sandboxed process
+    ipc::TransportType transportType;                   ///< IPC transport type used
 };
 
 /**
@@ -272,6 +299,19 @@ private:
      * @return true if successful
      */
     bool applySELinuxContext(const std::string& sandboxId, const std::string& context);
+
+    /**
+     * @brief Set resource limits for sandboxed process
+     * @param config Sandbox configuration
+     * @return true if successful
+     */
+    bool setResourceLimits(const SandboxConfig& config);
+
+    /**
+     * @brief Drop privileges in sandboxed process
+     * @return true if successful
+     */
+    bool dropPrivileges();
 };
 
 } // namespace security

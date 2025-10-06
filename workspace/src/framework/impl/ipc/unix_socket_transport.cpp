@@ -312,7 +312,43 @@ TransportResult<MessagePtr> UnixSocketTransport::receive(int32_t timeout_ms) {
         return {TransportError::NOT_CONNECTED, nullptr, "Not connected"};
     }
 
-    int target_fd = unix_config_.is_server ? socket_fd_ : client_fd_;
+    // For SERVER mode, we need to wait for client connection and receive from client FD
+    if (unix_config_.is_server) {
+        // Wait for at least one client to connect
+        auto start_time = std::chrono::steady_clock::now();
+        while (true) {
+            {
+                std::lock_guard<std::mutex> lock(clients_mutex_);
+                if (!clients_.empty()) {
+                    // Receive from first client (parent-child 1-to-1 communication)
+                    return receiveFromSocket(clients_[0].fd, timeout_ms);
+                }
+            }
+
+            // Check timeout
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - start_time).count();
+            if (elapsed >= timeout_ms) {
+                return {TransportError::TIMEOUT, nullptr, "No client connected within timeout"};
+            }
+
+            // Manually trigger accept by polling the listening socket
+            struct pollfd pfd;
+            pfd.fd = socket_fd_;
+            pfd.events = POLLIN;
+            int ret = poll(&pfd, 1, 10); // 10ms poll timeout
+            if (ret > 0 && (pfd.revents & POLLIN)) {
+                // Connection is ready, accept it
+                acceptNewConnection();
+            }
+
+            // Brief sleep to avoid busy-wait
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    // CLIENT mode: receive from server
+    int target_fd = client_fd_;
     return receiveFromSocket(target_fd, timeout_ms);
 }
 

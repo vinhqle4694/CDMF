@@ -247,6 +247,8 @@ set(CDMF_SECURITY_SOURCES
     impl/security/permission_manager.cpp
     impl/security/code_verifier.cpp
     impl/security/sandbox_manager.cpp
+    impl/security/sandbox_ipc.cpp
+    impl/security/sandbox_module_loader.cpp
     impl/security/resource_limiter.cpp
 )
 
@@ -260,12 +262,17 @@ target_include_directories(cdmf_security
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${nlohmann_json_SOURCE_DIR}/include
 )
 
 target_link_libraries(cdmf_security
     PUBLIC
         cdmf_foundation
         cdmf_core
+        cdmf_ipc
+    PRIVATE
+        nlohmann_json::nlohmann_json
 )
 
 # Link OpenSSL for cryptographic operations
