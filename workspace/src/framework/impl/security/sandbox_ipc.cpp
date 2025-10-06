@@ -72,7 +72,8 @@ SandboxIPC::SandboxIPC(Role role, const std::string& sandboxId,
     , sandbox_id_(sandboxId)
     , transport_(std::move(transport))
     , stats_{}
-    , next_request_id_(1) {
+    , next_request_id_(1)
+    , receiver_running_(false) {
     LOGD_FMT("SandboxIPC created: role=" << (role == Role::PARENT ? "PARENT" : "CHILD")
              << ", sandboxId=" << sandboxId);
 }
@@ -106,8 +107,19 @@ bool SandboxIPC::initialize(const ipc::TransportConfig& config) {
             return false;
         }
         LOGI_FMT("Parent transport started: " << getEndpoint());
+
+        // Don't start receiver thread yet - wait for initial connection handshake
+        // Call startReceiverThread() after initial message exchange completes
     } else {
-        // Child: Connect to parent
+        // Child: Start transport first (sets up ring buffers for shared memory, creates socket for unix socket)
+        result = transport_->start();
+        if (!result.success()) {
+            LOGE_FMT("Failed to start child transport: " << result.error_message);
+            return false;
+        }
+        LOGI_FMT("Child transport started: " << getEndpoint());
+
+        // Then connect to parent
         result = transport_->connect();
         if (!result.success()) {
             LOGE_FMT("Failed to connect transport: " << result.error_message);
@@ -145,7 +157,7 @@ bool SandboxIPC::sendMessage(const SandboxMessage& msg, int32_t timeoutMs) {
     }
 
     updateStats(true, bytes, true);
-    LOGD_FMT("Sent message: type=" << static_cast<uint32_t>(msg.type)
+    LOGV_FMT("Sent message: type=" << static_cast<uint32_t>(msg.type)
              << ", requestId=" << msg.requestId << ", bytes=" << bytes);
     return true;
 }
@@ -178,7 +190,7 @@ bool SandboxIPC::receiveMessage(SandboxMessage& msg, int32_t timeoutMs) {
     msg = SandboxMessage::fromIPCMessage(*result.value);
 
     updateStats(false, bytes, true);
-    LOGD_FMT("Received message: type=" << static_cast<uint32_t>(msg.type)
+    LOGV_FMT("Received message: type=" << static_cast<uint32_t>(msg.type)
              << ", requestId=" << msg.requestId << ", bytes=" << bytes);
     return true;
 }
@@ -240,7 +252,32 @@ bool SandboxIPC::sendRequest(const SandboxMessage& request, SandboxMessage& resp
     return false;
 }
 
+void SandboxIPC::startReceiverThread() {
+    if (role_ != Role::PARENT) {
+        LOGW("startReceiverThread() called on non-parent role, ignoring");
+        return;
+    }
+
+    if (receiver_running_) {
+        LOGW_FMT("Receiver thread already running for sandbox: " << sandbox_id_);
+        return;
+    }
+
+    receiver_running_ = true;
+    receiver_thread_ = std::make_unique<std::thread>(&SandboxIPC::receiverThreadFunc, this);
+    LOGI_FMT("Parent receiver thread started for sandbox: " << sandbox_id_);
+}
+
 void SandboxIPC::close() {
+    // Stop receiver thread if running
+    if (receiver_running_) {
+        receiver_running_ = false;
+        if (receiver_thread_ && receiver_thread_->joinable()) {
+            receiver_thread_->join();
+        }
+        LOGI_FMT("Receiver thread stopped");
+    }
+
     if (transport_) {
         LOGI_FMT("Closing SandboxIPC: sandbox=" << sandbox_id_);
         transport_->stop();
@@ -382,6 +419,43 @@ ipc::TransportConfig createSandboxTransportConfig(
     }
 
     return config;
+}
+
+void SandboxIPC::receiverThreadFunc() {
+    LOGI_FMT("Receiver thread started for sandbox: " << sandbox_id_);
+
+    while (receiver_running_) {
+        SandboxMessage msg;
+
+        // Try to receive message with 100ms timeout
+        if (!receiveMessage(msg, 100)) {
+            continue; // Timeout or error, try again
+        }
+
+        // Process received message
+        switch (msg.type) {
+            case SandboxMessageType::HEARTBEAT:
+                LOGD_FMT("Received HEARTBEAT from child: sandbox=" << sandbox_id_);
+                break;
+
+            case SandboxMessageType::STATUS_REPORT:
+                LOGD_FMT("Received STATUS_REPORT from child: sandbox=" << sandbox_id_
+                         << ", payload=" << msg.payload);
+                break;
+
+            case SandboxMessageType::ERROR:
+                LOGD_FMT("Received ERROR from child: sandbox=" << sandbox_id_
+                         << ", error=" << msg.payload);
+                break;
+
+            default:
+                LOGV_FMT("Received message type=" << static_cast<uint32_t>(msg.type)
+                         << " from child: sandbox=" << sandbox_id_);
+                break;
+        }
+    }
+
+    LOGI_FMT("Receiver thread stopped for sandbox: " << sandbox_id_);
 }
 
 const char* transportTypeToString(ipc::TransportType type) {

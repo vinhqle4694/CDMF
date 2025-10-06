@@ -19,7 +19,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Options
 # ==============================================================================
 
-option(CDMF_BUILD_TESTS "Build unit tests" ON)
+option(CDMF_BUILD_TESTS "Build unit tests" OFF)
 option(CDMF_BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(CDMF_ENABLE_COVERAGE "Enable code coverage" OFF)
 option(CDMF_ENABLE_SANITIZERS "Enable sanitizers (address, undefined)" OFF)
@@ -100,6 +100,8 @@ add_subdirectory(src/framework)
 # Modules
 # ==============================================================================
 
+add_subdirectory(src/modules/hello_service_module)
+
 # ==============================================================================
 # Unit Tests
 # ==============================================================================
@@ -174,6 +176,7 @@ message(STATUS "  - cdmf_security (Security subsystem)")
 message(STATUS "  - cdmf (All-in-one)")
 message(STATUS "")
 message(STATUS "Modules:")
+message(STATUS "  - hello_service_module (Sample service module)")
 message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")

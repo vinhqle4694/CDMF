@@ -18,6 +18,7 @@
 #include <mutex>
 #include <atomic>
 #include <map>
+#include <thread>
 #include "ipc/transport.h"
 #include "ipc/message.h"
 
@@ -151,6 +152,14 @@ public:
                     int32_t timeoutMs = 5000);
 
     /**
+     * @brief Start background receiver thread (parent only)
+     *
+     * Should be called AFTER initial connection handshake completes
+     * to avoid race conditions with main thread receiving initial messages.
+     */
+    void startReceiverThread();
+
+    /**
      * @brief Close IPC channel
      */
     void close();
@@ -205,6 +214,10 @@ private:
     // Request-response tracking
     std::atomic<uint64_t> next_request_id_;
 
+    // Background receiver thread (parent only)
+    std::atomic<bool> receiver_running_;
+    std::unique_ptr<std::thread> receiver_thread_;
+
     /**
      * @brief Update statistics
      * @param is_send true for send, false for receive
@@ -212,6 +225,12 @@ private:
      * @param success true if operation succeeded
      */
     void updateStats(bool is_send, size_t bytes, bool success);
+
+    /**
+     * @brief Receiver thread function (parent only)
+     * Continuously reads messages from child process
+     */
+    void receiverThreadFunc();
 };
 
 /**

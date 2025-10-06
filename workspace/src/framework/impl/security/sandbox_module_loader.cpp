@@ -54,13 +54,13 @@ int SandboxModuleLoader::runSandboxedProcess(const std::string& sandboxId,
     // Main event loop
     int heartbeat_counter = 0;
     while (ctx.running) {
-        LOGD_FMT("Child event loop iteration, heartbeat_counter=" << heartbeat_counter);
+        LOGV_FMT("Child event loop iteration, heartbeat_counter=" << heartbeat_counter);
         SandboxMessage msg;
 
         // Try to receive message with timeout
-        LOGD("Child calling receiveMessage...");
+        LOGV("Child calling receiveMessage...");
         if (!ctx.ipc->receiveMessage(msg, 1000)) {
-            LOGD("Child receiveMessage returned false (timeout or error)");
+            LOGV("Child receiveMessage returned false (timeout or error)");
             // Timeout - send heartbeat every 5 seconds
             if (++heartbeat_counter >= 5) {
                 sendHeartbeat(ctx);

@@ -562,9 +562,15 @@ bool SandboxManager::setupProcessSandbox(const std::string& sandboxId,
 
         if (childConnected) {
             LOGI_FMT("Parent Unix socket connection established with child");
+            // Now start receiver thread for background monitoring
+            ipc->startReceiverThread();
         } else {
             LOGW_FMT("Parent-child Unix socket connection may not be fully established");
         }
+    } else {
+        // For shared memory, start receiver thread immediately
+        // (no accept() required, connection is instant)
+        ipc->startReceiverThread();
     }
 
     // Store sandbox info with IPC channel and transport type

@@ -16,6 +16,8 @@
 #include <errno.h>
 #include <cstring>
 #include <sstream>
+#include <chrono>
+#include <thread>
 
 namespace cdmf {
 namespace ipc {
@@ -29,8 +31,8 @@ SharedMemoryTransport::SharedMemoryTransport()
     , shm_size_(0)
     , is_owner_(false)
     , control_block_(nullptr)
-    , tx_ring_(nullptr)
-    , rx_ring_(nullptr)
+    , tx_queue_(nullptr)
+    , rx_queue_(nullptr)
     , tx_sem_(SEM_FAILED)
     , rx_sem_(SEM_FAILED)
     , last_error_(TransportError::SUCCESS) {
@@ -138,6 +140,11 @@ TransportResult<bool> SharedMemoryTransport::start() {
         if (!result) return result;
     }
 
+    // Set running and connected flags
+    running_ = true;
+    connected_ = true;
+    setState(TransportState::CONNECTED);
+
     LOGI_FMT("SharedMemoryTransport::start completed successfully");
     return {TransportError::SUCCESS, true, ""};
 }
@@ -189,8 +196,8 @@ TransportResult<bool> SharedMemoryTransport::cleanup() {
 TransportResult<bool> SharedMemoryTransport::connect() {
     LOGI_FMT("SharedMemoryTransport::connect called");
     if (connected_) {
-        LOGW_FMT("Already connected");
-        return {TransportError::ALREADY_CONNECTED, false, "Already connected"};
+        LOGD_FMT("Already connected - shared memory is ready after start()");
+        return {TransportError::SUCCESS, true, "Already connected"};
     }
 
     setState(TransportState::CONNECTING);
@@ -281,13 +288,13 @@ TransportResult<bool> SharedMemoryTransport::send(const Message& message) {
     uint8_t* data_ptr = reinterpret_cast<uint8_t*>(envelope) + ShmMessageEnvelope::HEADER_SIZE;
     std::memcpy(data_ptr, result.data.data(), result.data.size());
 
-    // Push to ring buffer
-    auto push_result = pushToRing(tx_ring_, tx_sem_,
+    // Push to message queue
+    auto push_result = pushToQueue(tx_queue_, tx_sem_,
                      reinterpret_cast<uint8_t*>(envelope),
                      ShmMessageEnvelope::HEADER_SIZE + result.data.size());
 
     if (!push_result.success()) {
-        LOGE_FMT("SharedMemoryTransport::send failed - ring buffer push failed");
+        LOGE_FMT("SharedMemoryTransport::send failed - message queue push failed");
     }
     return push_result;
 }
@@ -302,7 +309,7 @@ TransportResult<MessagePtr> SharedMemoryTransport::receive(int32_t timeout_ms) {
         return {TransportError::NOT_CONNECTED, nullptr, "Not connected"};
     }
 
-    return popFromRing(rx_ring_, rx_sem_, timeout_ms);
+    return popFromQueue(rx_queue_, rx_sem_, timeout_ms);
 }
 
 TransportResult<MessagePtr> SharedMemoryTransport::tryReceive() {
@@ -540,45 +547,45 @@ TransportResult<bool> SharedMemoryTransport::setupRingBuffers() {
     size_t offset = sizeof(ShmControlBlock);
     offset = (offset + 63) & ~63; // Align to 64 bytes
 
-    // Get pointers to both ring buffers
-    ByteRingBuffer* ring1 = reinterpret_cast<ByteRingBuffer*>(
+    // Get pointers to both message queues
+    ShmMessageQueue* queue1 = reinterpret_cast<ShmMessageQueue*>(
         static_cast<uint8_t*>(shm_addr_) + offset);
 
-    offset += sizeof(ByteRingBuffer);
+    offset += sizeof(ShmMessageQueue);
     offset = (offset + 63) & ~63;
 
-    ByteRingBuffer* ring2 = nullptr;
+    ShmMessageQueue* queue2 = nullptr;
     if (shm_config_.bidirectional) {
-        ring2 = reinterpret_cast<ByteRingBuffer*>(
+        queue2 = reinterpret_cast<ShmMessageQueue*>(
             static_cast<uint8_t*>(shm_addr_) + offset);
     }
 
-    // Initialize ring buffers (owner only)
+    // Initialize message queues (owner only)
     if (is_owner_) {
-        new (ring1) ByteRingBuffer();
-        if (ring2) {
-            new (ring2) ByteRingBuffer();
+        new (queue1) ShmMessageQueue();
+        if (queue2) {
+            new (queue2) ShmMessageQueue();
         }
     }
 
     // Assign TX/RX based on role
     if (shm_config_.bidirectional) {
         if (is_owner_) {
-            // Owner (server): TX = ring1, RX = ring2
-            tx_ring_ = ring1;
-            rx_ring_ = ring2;
+            // Owner (server): TX = queue1, RX = queue2
+            tx_queue_ = queue1;
+            rx_queue_ = queue2;
         } else {
-            // Client: TX = ring2, RX = ring1 (swapped for bidirectional communication)
-            tx_ring_ = ring2;
-            rx_ring_ = ring1;
+            // Client: TX = queue2, RX = queue1 (swapped for bidirectional communication)
+            tx_queue_ = queue2;
+            rx_queue_ = queue1;
         }
     } else {
-        // Unidirectional: both use same ring
-        tx_ring_ = ring1;
-        rx_ring_ = ring1;
+        // Unidirectional: both use same queue
+        tx_queue_ = queue1;
+        rx_queue_ = queue1;
     }
 
-    LOGD_FMT("Ring buffers configured - role: " << (is_owner_ ? "owner" : "client")
+    LOGD_FMT("Message queues configured - role: " << (is_owner_ ? "owner" : "client")
              << ", mode: " << (shm_config_.bidirectional ? "bidirectional" : "unidirectional"));
 
     return {TransportError::SUCCESS, true, ""};
@@ -654,25 +661,52 @@ TransportResult<bool> SharedMemoryTransport::closeSemaphores() {
     return {TransportError::SUCCESS, true, ""};
 }
 
-TransportResult<bool> SharedMemoryTransport::pushToRing(ByteRingBuffer* ring, sem_t* sem,
-                                                         const uint8_t* data, size_t size) {
-    // Simple implementation: allocate message buffer and store pointer in ring
-    // Note: Since producer and consumer are in the same process, heap pointers work
-
-    if (!ring || !data || size == 0) {
-        LOGE_FMT("pushToRing failed - invalid arguments: ring=" << ring << ", data=" << data << ", size=" << size);
+TransportResult<bool> SharedMemoryTransport::pushToQueue(ShmMessageQueue* queue, sem_t* sem,
+                                                          const uint8_t* data, size_t size) {
+    if (!queue || !data || size == 0) {
+        LOGE_FMT("pushToQueue failed - invalid arguments: queue=" << queue << ", data=" << data << ", size=" << size);
         return {TransportError::INVALID_MESSAGE, false, "Invalid arguments"};
     }
 
-    // Allocate buffer for message (this works for same-process IPC)
-    uint8_t* msg_buffer = new uint8_t[size];
-    std::memcpy(msg_buffer, data, size);
-
-    // Try to push pointer to ring buffer
-    if (!ring->try_push(msg_buffer)) {
-        delete[] msg_buffer;
-        return {TransportError::BUFFER_OVERFLOW, false, "Ring buffer full"};
+    if (size > ShmMessageQueue::MAX_MSG_SIZE) {
+        LOGE_FMT("pushToQueue failed - message too large: " << size << " > " << ShmMessageQueue::MAX_MSG_SIZE);
+        return {TransportError::BUFFER_OVERFLOW, false, "Message too large"};
     }
+
+    // Message format: [4 bytes size][data]
+    const uint32_t total_size = sizeof(uint32_t) + size;
+
+    // Try to write to queue (lock-free)
+    uint32_t write_pos = queue->write_pos.load(std::memory_order_relaxed);
+    uint32_t read_pos = queue->read_pos.load(std::memory_order_acquire);
+
+    // Calculate available space (circular buffer)
+    uint32_t available;
+    if (write_pos >= read_pos) {
+        available = ShmMessageQueue::QUEUE_SIZE - (write_pos - read_pos) - 1;
+    } else {
+        available = read_pos - write_pos - 1;
+    }
+
+    if (total_size > available) {
+        LOGV_FMT("pushToQueue - queue full, available=" << available << ", needed=" << total_size);
+        return {TransportError::BUFFER_OVERFLOW, false, "Queue full"};
+    }
+
+    // Write message size
+    for (size_t i = 0; i < sizeof(uint32_t); ++i) {
+        queue->data[write_pos] = (size >> (i * 8)) & 0xFF;
+        write_pos = (write_pos + 1) % ShmMessageQueue::QUEUE_SIZE;
+    }
+
+    // Write message data
+    for (size_t i = 0; i < size; ++i) {
+        queue->data[write_pos] = data[i];
+        write_pos = (write_pos + 1) % ShmMessageQueue::QUEUE_SIZE;
+    }
+
+    // Update write position (release semantics so reader sees the data)
+    queue->write_pos.store(write_pos, std::memory_order_release);
 
     updateStats(true, size, true);
 
@@ -684,68 +718,86 @@ TransportResult<bool> SharedMemoryTransport::pushToRing(ByteRingBuffer* ring, se
     return {TransportError::SUCCESS, true, ""};
 }
 
-TransportResult<MessagePtr> SharedMemoryTransport::popFromRing(ByteRingBuffer* ring,
-                                                                sem_t* sem,
-                                                                int32_t timeout_ms) {
-    if (!ring) {
-        LOGE_FMT("popFromRing failed - invalid ring buffer");
-        return {TransportError::INVALID_MESSAGE, nullptr, "Invalid ring buffer"};
+TransportResult<MessagePtr> SharedMemoryTransport::popFromQueue(ShmMessageQueue* queue,
+                                                                 sem_t* sem,
+                                                                 int32_t timeout_ms) {
+    if (!queue) {
+        LOGE_FMT("popFromQueue failed - invalid queue");
+        return {TransportError::INVALID_MESSAGE, nullptr, "Invalid queue"};
     }
 
-    // Wait on semaphore if blocking
-    if (shm_config_.use_semaphores && sem != SEM_FAILED && timeout_ms != 0) {
-        if (timeout_ms < 0) {
-            sem_wait(sem);
-        } else {
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_sec += timeout_ms / 1000;
-            ts.tv_nsec += (timeout_ms % 1000) * 1000000;
-            if (ts.tv_nsec >= 1000000000) {
-                ts.tv_sec++;
-                ts.tv_nsec -= 1000000000;
+    auto start_time = std::chrono::steady_clock::now();
+    auto timeout_duration = std::chrono::milliseconds(timeout_ms > 0 ? timeout_ms : 1);
+
+    while (true) {
+        // Try to read from queue (lock-free)
+        uint32_t read_pos = queue->read_pos.load(std::memory_order_relaxed);
+        uint32_t write_pos = queue->write_pos.load(std::memory_order_acquire);
+
+        // Check if queue is empty
+        if (read_pos == write_pos) {
+            // Queue is empty
+            if (timeout_ms == 0) {
+                // Non-blocking, return immediately
+                return {TransportError::RECV_FAILED, nullptr, "No data available"};
             }
 
-            if (sem_timedwait(sem, &ts) < 0) {
-                if (errno == ETIMEDOUT) {
+            // Check timeout
+            if (timeout_ms > 0) {
+                auto elapsed = std::chrono::steady_clock::now() - start_time;
+                if (elapsed >= timeout_duration) {
                     return {TransportError::TIMEOUT, nullptr, "Timeout waiting for message"};
                 }
-                return {TransportError::CONNECTION_FAILED, nullptr, std::string("Semaphore wait failed: ") + strerror(errno)};
             }
+
+            // Wait briefly before retry (1ms)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
         }
+
+        // Read message size (4 bytes)
+        uint32_t msg_size = 0;
+        for (size_t i = 0; i < sizeof(uint32_t); ++i) {
+            msg_size |= (static_cast<uint32_t>(queue->data[read_pos]) << (i * 8));
+            read_pos = (read_pos + 1) % ShmMessageQueue::QUEUE_SIZE;
+        }
+
+        if (msg_size == 0 || msg_size > ShmMessageQueue::MAX_MSG_SIZE) {
+            LOGE_FMT("popFromQueue - invalid message size: " << msg_size);
+            return {TransportError::INVALID_MESSAGE, nullptr, "Invalid message size"};
+        }
+
+        // Read message data into receive buffer
+        if (msg_size > recv_buffer_.size()) {
+            recv_buffer_.resize(msg_size);
+        }
+
+        for (size_t i = 0; i < msg_size; ++i) {
+            recv_buffer_[i] = queue->data[read_pos];
+            read_pos = (read_pos + 1) % ShmMessageQueue::QUEUE_SIZE;
+        }
+
+        // Update read position (release semantics)
+        queue->read_pos.store(read_pos, std::memory_order_release);
+
+        // Parse the envelope
+        ShmMessageEnvelope* envelope = reinterpret_cast<ShmMessageEnvelope*>(recv_buffer_.data());
+        uint8_t* serialized_data = recv_buffer_.data() + ShmMessageEnvelope::HEADER_SIZE;
+        size_t data_size = envelope->size;
+
+        // Deserialize the message
+        auto serializer = SerializerFactory::createSerializer(SerializationFormat::BINARY);
+        auto result = serializer->deserialize(serialized_data, data_size);
+
+        if (!result.success) {
+            LOGE_FMT("Failed to deserialize message: " << result.error_message);
+            return {TransportError::SERIALIZATION_ERROR, nullptr, result.error_message};
+        }
+
+        updateStats(false, data_size, true);
+
+        return {TransportError::SUCCESS, result.message, ""};
     }
-
-    // Try to pop from ring buffer
-    uint8_t* msg_buffer = nullptr;
-    if (!ring->try_pop(msg_buffer)) {
-        return {TransportError::RECV_FAILED, nullptr, "No data available"};
-    }
-
-    if (!msg_buffer) {
-        LOGE_FMT("popFromRing - null message buffer after successful pop");
-        return {TransportError::RECV_FAILED, nullptr, "Null message buffer"};
-    }
-
-    // Parse the envelope
-    ShmMessageEnvelope* envelope = reinterpret_cast<ShmMessageEnvelope*>(msg_buffer);
-    uint8_t* serialized_data = msg_buffer + ShmMessageEnvelope::HEADER_SIZE;
-    size_t data_size = envelope->size;
-
-    // Deserialize the message
-    auto serializer = SerializerFactory::createSerializer(SerializationFormat::BINARY);
-    auto result = serializer->deserialize(serialized_data, data_size);
-
-    // Free the buffer
-    delete[] msg_buffer;
-
-    if (!result.success) {
-        LOGE_FMT("Failed to deserialize message: " << result.error_message);
-        return {TransportError::SERIALIZATION_ERROR, nullptr, result.error_message};
-    }
-
-    updateStats(false, data_size, true);
-
-    return {TransportError::SUCCESS, result.message, ""};
 }
 
 void SharedMemoryTransport::ioThreadFunc() {
@@ -756,7 +808,7 @@ void SharedMemoryTransport::ioThreadFunc() {
 }
 
 void SharedMemoryTransport::pollReceiveRing() {
-    auto result = popFromRing(rx_ring_, rx_sem_, 0);
+    auto result = popFromQueue(rx_queue_, rx_sem_, 0);
     if (result.success() && result.value && message_callback_) {
         message_callback_(result.value);
     }

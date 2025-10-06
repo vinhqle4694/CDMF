@@ -1,0 +1,66 @@
+{
+  "module": {
+    "symbolic-name": "cdmf.hello_service",
+    "name": "Hello Service Module",
+    "version": "1.0.0",
+    "description": "Simple greeting service demonstrating CDMF module development with security & sandboxing",
+    "library": "hello_service_module.so",
+    "auto-start": true
+  },
+  "dependencies": [],
+  "exports": [
+    {
+      "interface": "cdmf::IHelloService",
+      "version": "1.0.0"
+    }
+  ],
+  "activator": {
+    "class": "cdmf::modules::HelloServiceActivator",
+    "create-function": "createModuleActivator",
+    "destroy-function": "destroyModuleActivator"
+  },
+  "security": {
+    "permissions": [
+      {
+        "type": "SERVICE_REGISTER",
+        "target": "cdmf::IHelloService",
+        "description": "Permission to register the Hello Service"
+      },
+      {
+        "type": "EVENT_SUBSCRIBE",
+        "target": "BOOT_COMPLETED",
+        "description": "Permission to subscribe to BOOT_COMPLETED event"
+      },
+      {
+        "type": "FILE_WRITE",
+        "target": "/tmp/hello_service_greetings.log",
+        "description": "Permission to write greeting log file"
+      },
+      {
+        "type": "PROPERTY_READ",
+        "target": "*",
+        "description": "Permission to read configuration properties"
+      }
+    ],
+    "sandbox": {
+      "enabled": true,
+      "type": "PROCESS",
+      "config": {
+        "allowNetworkAccess": false,
+        "allowFileSystemAccess": true,
+        "allowedPaths": [
+          "/tmp/hello_service_greetings.log"
+        ],
+        "maxMemoryMB": 64,
+        "maxCPUPercent": 5,
+        "maxFileDescriptors": 64,
+        "maxThreads": 5,
+        "properties": {
+          "ipc_transport": "unix_socket",
+          "ipc_buffer_size": "4096",
+          "ipc_timeout_ms": "5000"
+        }
+      }
+    }
+  }
+}

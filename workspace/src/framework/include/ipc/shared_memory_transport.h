@@ -190,10 +190,20 @@ private:
     // Control block and ring buffers in shared memory
     ShmControlBlock* control_block_;
 
-    // Ring buffer for messages (stored as byte arrays)
-    using ByteRingBuffer = SPSCRingBuffer<uint8_t*, 4096>;
-    ByteRingBuffer* tx_ring_;  // Transmit ring buffer
-    ByteRingBuffer* rx_ring_;  // Receive ring buffer
+    // Shared memory message queue (stores actual data, not pointers)
+    struct ShmMessageQueue {
+        static constexpr size_t QUEUE_SIZE = 1024 * 1024;  // 1MB per queue
+        static constexpr size_t MAX_MSG_SIZE = 65536;      // 64KB max message
+
+        alignas(64) std::atomic<uint32_t> write_pos;
+        alignas(64) std::atomic<uint32_t> read_pos;
+        uint8_t data[QUEUE_SIZE];
+
+        ShmMessageQueue() : write_pos(0), read_pos(0) {}
+    };
+
+    ShmMessageQueue* tx_queue_;  // Transmit queue
+    ShmMessageQueue* rx_queue_;  // Receive queue
 
     // Semaphores for blocking operations
     sem_t* tx_sem_;  // Signal when data available in tx
@@ -234,10 +244,10 @@ private:
     TransportResult<bool> openSemaphores();
     TransportResult<bool> closeSemaphores();
 
-    TransportResult<bool> pushToRing(ByteRingBuffer* ring, sem_t* sem,
-                                      const uint8_t* data, size_t size);
-    TransportResult<MessagePtr> popFromRing(ByteRingBuffer* ring, sem_t* sem,
-                                             int32_t timeout_ms);
+    TransportResult<bool> pushToQueue(ShmMessageQueue* queue, sem_t* sem,
+                                       const uint8_t* data, size_t size);
+    TransportResult<MessagePtr> popFromQueue(ShmMessageQueue* queue, sem_t* sem,
+                                              int32_t timeout_ms);
 
     void ioThreadFunc();
     void pollReceiveRing();
