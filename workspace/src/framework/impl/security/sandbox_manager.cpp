@@ -212,6 +212,12 @@ bool SandboxManager::stopSandbox(const std::string& sandboxId) {
 
     auto& info = it->second;
 
+    // Stop receiver thread first to avoid race conditions with transport layer
+    if (info->ipc) {
+        LOGI_FMT("Stopping receiver thread for sandbox: " << sandboxId);
+        info->ipc->stopReceiverThread();
+    }
+
     // Send SHUTDOWN command to child process if IPC is available
     if (info->ipc && info->ipc->isConnected()) {
         LOGI_FMT("Sending SHUTDOWN command to sandbox: " << sandboxId);

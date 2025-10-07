@@ -499,6 +499,15 @@ TransportResult<bool> UnixSocketTransport::configureSocket(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
                &unix_config_.recv_buffer_size, sizeof(unix_config_.recv_buffer_size));
 
+    // Set receive timeout for blocking recv() calls
+    // This allows receiver threads to timeout and check exit conditions
+    struct timeval tv;
+    tv.tv_sec = 0;
+    tv.tv_usec = 100000; // 100ms timeout
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
+        LOGW_FMT("Failed to set SO_RCVTIMEO: " << strerror(errno));
+    }
+
     // Set non-blocking for async mode
     if (config_.mode == TransportMode::ASYNC || config_.mode == TransportMode::HYBRID) {
         if (!setNonBlocking(fd)) {

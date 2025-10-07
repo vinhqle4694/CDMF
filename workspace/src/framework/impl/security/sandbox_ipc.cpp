@@ -268,15 +268,27 @@ void SandboxIPC::startReceiverThread() {
     LOGI_FMT("Parent receiver thread started for sandbox: " << sandbox_id_);
 }
 
+void SandboxIPC::stopReceiverThread() {
+    if (role_ != Role::PARENT) {
+        return;
+    }
+
+    if (!receiver_running_) {
+        return;
+    }
+
+    LOGI_FMT("Stopping receiver thread for sandbox: " << sandbox_id_);
+    receiver_running_ = false;
+
+    if (receiver_thread_ && receiver_thread_->joinable()) {
+        receiver_thread_->join();
+    }
+    LOGI_FMT("Receiver thread stopped for sandbox: " << sandbox_id_);
+}
+
 void SandboxIPC::close() {
     // Stop receiver thread if running
-    if (receiver_running_) {
-        receiver_running_ = false;
-        if (receiver_thread_ && receiver_thread_->joinable()) {
-            receiver_thread_->join();
-        }
-        LOGI_FMT("Receiver thread stopped");
-    }
+    stopReceiverThread();
 
     if (transport_) {
         LOGI_FMT("Closing SandboxIPC: sandbox=" << sandbox_id_);

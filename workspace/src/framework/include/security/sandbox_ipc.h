@@ -160,6 +160,14 @@ public:
     void startReceiverThread();
 
     /**
+     * @brief Stop background receiver thread (parent only)
+     *
+     * Should be called BEFORE sending shutdown commands to avoid
+     * race conditions with transport layer access.
+     */
+    void stopReceiverThread();
+
+    /**
      * @brief Close IPC channel
      */
     void close();
