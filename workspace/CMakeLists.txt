@@ -114,7 +114,7 @@ if(CDMF_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest ${CMAKE_BINARY_DIR}/googletest)
 
     # Add tests subdirectory
-    add_subdirectory(tests)
+    add_subdirectory(tests/unit)
 endif()
 
 # ==============================================================================
