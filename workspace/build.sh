@@ -39,6 +39,7 @@ print_info() {
 # Parse arguments
 CLEAN=0
 RUN_TESTS=0
+RUN_AUTO_TESTS=0
 RUN_CDMF=0
 ENABLE_COVERAGE=0
 ENABLE_SANITIZERS=0
@@ -51,13 +52,18 @@ while [[ $# -gt 0 ]]; do
             CLEAN=1
             shift
             ;;
-        --no-tests)
-            RUN_TESTS=0
+        --tests)
+            RUN_TESTS=1
+            shift
+            ;;
+        --auto-test)
+            RUN_AUTO_TESTS=1
             shift
             ;;
         --run)
             RUN_CDMF=1
             RUN_TESTS=0
+            RUN_AUTO_TESTS=0
             shift
             ;;
         --coverage)
@@ -95,7 +101,8 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --clean                Remove build directory before building"
-            echo "  --no-tests             Skip running tests"
+            echo "  --tests                Run unit tests after building (disabled by default)"
+            echo "  --auto-test            Run automation tests after building (disabled by default)"
             echo "  --run                  Run CDMF executable only (skip build and tests)"
             echo "  --coverage             Enable code coverage (implies --debug)"
             echo "  --sanitizers           Enable sanitizers (implies --debug)"
@@ -170,9 +177,9 @@ else
     ls -lh bin/ 2>/dev/null || true
 fi
 
-# Run tests
+# Run unit tests
 if [ $RUN_TESTS -eq 1 ]; then
-    print_header "Running Tests"
+    print_header "Running Unit Tests"
 
     # Export ENABLE_SOCKET_TESTS for test executables
     export ENABLE_SOCKET_TESTS
@@ -183,14 +190,42 @@ if [ $RUN_TESTS -eq 1 ]; then
         print_info "Socket tests: DISABLED (use --enable-socket-tests to enable)"
     fi
 
-    if ctest --output-on-failure; then
-        print_success "All tests passed!"
+    # Run only unit tests (exclude automation tests)
+    if ctest --output-on-failure -E "AutomationSystemTest"; then
+        print_success "All unit tests passed!"
     else
-        print_error "Some tests failed"
+        print_error "Some unit tests failed"
         exit 1
     fi
 else
-    print_info "Skipping tests (--no-tests)"
+    print_info "Skipping unit tests (use --tests to run unit tests)"
+fi
+
+# Run automation tests
+if [ $RUN_AUTO_TESTS -eq 1 ]; then
+    print_header "Running Automation Tests"
+
+    # Set environment variables for automation tests
+    export CDMF_TEST_EXECUTABLE="$(pwd)/bin/cdmf"
+    export CDMF_TEST_CONFIG="$(pwd)/config/framework.json"
+    export CDMF_TEST_LOG_FILE="$(pwd)/tests/automation_test/logs/test_automation.log"
+    export CDMF_TEST_WORKING_DIR="$(pwd)"
+
+    print_info "Test Configuration:"
+    print_info "  Executable: $CDMF_TEST_EXECUTABLE"
+    print_info "  Config: $CDMF_TEST_CONFIG"
+    print_info "  Log file: $CDMF_TEST_LOG_FILE"
+    print_info "  Working dir: $CDMF_TEST_WORKING_DIR"
+
+    # Run only automation tests
+    if ctest -R "AutomationSystemTest" --output-on-failure; then
+        print_success "All automation tests passed!"
+    else
+        print_error "Some automation tests failed"
+        exit 1
+    fi
+else
+    print_info "Skipping automation tests (use --auto-test to run automation tests)"
 fi
 
 # Generate coverage report
@@ -240,7 +275,11 @@ if [ $RUN_CDMF -eq 0 ]; then
     echo -e "  Test executables: bin/"
 
     if [ $RUN_TESTS -eq 1 ]; then
-        echo -e "${GREEN}✓ All tests passed${NC}"
+        echo -e "${GREEN}✓ All unit tests passed${NC}"
+    fi
+
+    if [ $RUN_AUTO_TESTS -eq 1 ]; then
+        echo -e "${GREEN}✓ All automation tests passed${NC}"
     fi
 
     echo "Install libraries:"

@@ -103,7 +103,7 @@ add_subdirectory(src/framework)
 add_subdirectory(src/modules/hello_service_module)
 
 # ==============================================================================
-# Unit Tests
+# Tests (Unit Tests + Automation Tests)
 # ==============================================================================
 
 if(CDMF_BUILD_TESTS)
@@ -113,8 +113,9 @@ if(CDMF_BUILD_TESTS)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/third_party/googletest ${CMAKE_BINARY_DIR}/googletest)
 
-    # Add tests subdirectory
+    # Add tests subdirectories
     add_subdirectory(tests/unit)
+    add_subdirectory(tests/automation_test)
 endif()
 
 # ==============================================================================
@@ -181,3 +182,9 @@ message(STATUS "")
 message(STATUS "Executables:")
 message(STATUS "  - cdmf_main -> cdmf (Main application)")
 message(STATUS "")
+if(CDMF_BUILD_TESTS)
+    message(STATUS "Tests:")
+    message(STATUS "  - Unit tests (tests/unit)")
+    message(STATUS "  - Automation tests (tests/automation_test)")
+    message(STATUS "")
+endif()
