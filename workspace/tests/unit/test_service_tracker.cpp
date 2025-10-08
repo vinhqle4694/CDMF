@@ -68,6 +68,12 @@ public:
     Module* getModule(uint64_t) const override { return nullptr; }
     Module* getModule(const std::string&) const override { return nullptr; }
 
+    // Configuration operations
+    Configuration* getConfiguration(const std::string&) override { return nullptr; }
+    void addConfigurationListener(IConfigurationListener*) override {}
+    bool removeConfigurationListener(IConfigurationListener*) override { return false; }
+    IConfigurationAdmin* getConfigurationAdmin() override { return nullptr; }
+
 private:
     mutable ServiceRegistry registry_;
     EventDispatcher dispatcher_;

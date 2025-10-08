@@ -8,6 +8,8 @@
 #include "module/module.h"
 #include "module/module_types.h"
 #include "service/command_dispatcher.h"
+#include "config/configuration_admin.h"
+#include "config/configuration.h"
 #include "utils/log.h"
 #include <iostream>
 #include <sstream>
@@ -46,6 +48,7 @@ void CommandHandler::registerCommands() {
     commands_["list"] = [this](const std::vector<std::string>& args) { return handleList(args); };
     commands_["info"] = [this](const std::vector<std::string>& args) { return handleInfo(args); };
     commands_["call"] = [this](const std::vector<std::string>& args) { return handleCall(args); };
+    commands_["config"] = [this](const std::vector<std::string>& args) { return handleConfig(args); };
     commands_["help"] = [this](const std::vector<std::string>& args) { return handleHelp(args); };
     commands_["exit"] = [this](const std::vector<std::string>& args) { return handleExit(args); };
 }
@@ -96,6 +99,11 @@ std::string CommandHandler::getHelpText() const {
     oss << "  list                              - List all modules with status\n";
     oss << "  info <module_name>                - Show detailed module information and APIs\n";
     oss << "  call <service> <method> [args...] - Call a service method\n";
+    oss << "  config [list|get|set|modules]     - Manage system configurations\n";
+    oss << "    config list                     - List all configurations\n";
+    oss << "    config get <pid>                - Get specific configuration\n";
+    oss << "    config set <pid> <key> <value>  - Set configuration property\n";
+    oss << "    config modules                  - Show module configurations\n";
     oss << "  help                              - Show this help message\n";
     oss << "  exit                              - Exit the command interface\n";
     return oss.str();
@@ -703,6 +711,317 @@ CommandResult CommandHandler::handleCall(const std::vector<std::string>& args) {
 
 CommandResult CommandHandler::handleHelp(const std::vector<std::string>& args) {
     return CommandResult(true, getHelpText());
+}
+
+CommandResult CommandHandler::handleConfig(const std::vector<std::string>& args) {
+    if (!framework_) {
+        return CommandResult(false, "Framework not available");
+    }
+
+    auto configAdmin = framework_->getConfigurationAdmin();
+    if (!configAdmin) {
+        return CommandResult(false, "Configuration Admin not available");
+    }
+
+    // Default action is 'list' if no arguments provided
+    std::string action = args.empty() ? "list" : args[0];
+
+    if (action == "list") {
+        // List all configurations
+        auto configs = configAdmin->listConfigurations();
+
+        if (configs.empty()) {
+            return CommandResult(true, "No configurations found");
+        }
+
+        std::ostringstream oss;
+        oss << "System configurations (" << configs.size() << "):\n\n";
+
+        for (auto* config : configs) {
+            if (!config) continue;
+
+            std::string pid = config->getPid();
+            std::string factoryPid = config->getFactoryPid();
+            bool isFactory = config->isFactoryConfiguration();
+            size_t propCount = config->size();
+
+            oss << "  PID: " << pid << "\n";
+            if (isFactory) {
+                oss << "  Factory PID: " << factoryPid << "\n";
+            }
+            oss << "  Properties: " << propCount << "\n";
+
+            // Display all properties
+            const auto& props = config->getProperties();
+            auto allKeys = props.keys();
+
+            if (!allKeys.empty()) {
+                oss << "  Values:\n";
+                for (const auto& key : allKeys) {
+                    // Try different types and format accordingly
+                    std::string value;
+
+                    // Try as string first
+                    auto strVal = props.getAs<std::string>(key);
+                    if (strVal.has_value()) {
+                        value = strVal.value();
+                    } else {
+                        // Try as const char*
+                        auto cstrVal = props.getAs<const char*>(key);
+                        if (cstrVal.has_value()) {
+                            value = cstrVal.value();
+                        } else {
+                            // Try as int
+                            auto intVal = props.getAs<int>(key);
+                            if (intVal.has_value()) {
+                                value = std::to_string(intVal.value());
+                            } else {
+                                // Try as bool
+                                auto boolVal = props.getAs<bool>(key);
+                                if (boolVal.has_value()) {
+                                    value = boolVal.value() ? "true" : "false";
+                                } else {
+                                    // Try as double
+                                    auto doubleVal = props.getAs<double>(key);
+                                    if (doubleVal.has_value()) {
+                                        value = std::to_string(doubleVal.value());
+                                    } else {
+                                        // Try as long
+                                        auto longVal = props.getAs<long>(key);
+                                        if (longVal.has_value()) {
+                                            value = std::to_string(longVal.value());
+                                        } else {
+                                            value = "<unknown type>";
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    oss << "    " << key << " = " << value << "\n";
+                }
+            }
+            oss << "\n";
+        }
+
+        // Show statistics
+        oss << "Total: " << configs.size() << " configuration(s)\n";
+        oss << "Factory configurations: " << configAdmin->getFactoryConfigurationCount() << "\n";
+
+        return CommandResult(true, oss.str());
+
+    } else if (action == "get") {
+        // Get a specific configuration by PID
+        if (args.size() < 2) {
+            return CommandResult(false, "Usage: config get <pid>");
+        }
+
+        std::string pid = args[1];
+        auto* config = configAdmin->getConfiguration(pid);
+
+        if (!config) {
+            return CommandResult(false, "Configuration not found: " + pid);
+        }
+
+        std::ostringstream oss;
+        oss << "Configuration: " << pid << "\n";
+
+        if (config->isFactoryConfiguration()) {
+            oss << "Factory PID: " << config->getFactoryPid() << "\n";
+        }
+
+        oss << "Properties (" << config->size() << "):\n";
+
+        const auto& props = config->getProperties();
+        auto allKeys = props.keys();
+
+        for (const auto& key : allKeys) {
+            // Try different types and format accordingly
+            std::string value;
+
+            // Try as string first
+            auto strVal = props.getAs<std::string>(key);
+            if (strVal.has_value()) {
+                value = strVal.value();
+            } else {
+                // Try as const char*
+                auto cstrVal = props.getAs<const char*>(key);
+                if (cstrVal.has_value()) {
+                    value = cstrVal.value();
+                } else {
+                    // Try as int
+                    auto intVal = props.getAs<int>(key);
+                    if (intVal.has_value()) {
+                        value = std::to_string(intVal.value());
+                    } else {
+                        // Try as bool
+                        auto boolVal = props.getAs<bool>(key);
+                        if (boolVal.has_value()) {
+                            value = boolVal.value() ? "true" : "false";
+                        } else {
+                            // Try as double
+                            auto doubleVal = props.getAs<double>(key);
+                            if (doubleVal.has_value()) {
+                                value = std::to_string(doubleVal.value());
+                            } else {
+                                // Try as long
+                                auto longVal = props.getAs<long>(key);
+                                if (longVal.has_value()) {
+                                    value = std::to_string(longVal.value());
+                                } else {
+                                    value = "<unknown type>";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            oss << "  " << key << " = " << value << "\n";
+        }
+
+        return CommandResult(true, oss.str());
+
+    } else if (action == "set") {
+        // Set a property in a configuration
+        if (args.size() < 4) {
+            return CommandResult(false, "Usage: config set <pid> <key> <value>");
+        }
+
+        std::string pid = args[1];
+        std::string key = args[2];
+        std::string value = args[3];
+
+        // Get or create configuration
+        auto* config = configAdmin->getConfiguration(pid);
+        if (!config) {
+            config = configAdmin->createConfiguration(pid);
+        }
+
+        // Update property
+        Properties props = config->getProperties();
+        props.set(key, value);
+        config->update(props);
+
+        return CommandResult(true, "Configuration updated: " + pid + " [" + key + " = " + value + "]");
+
+    } else if (action == "modules") {
+        // List configurations for all loaded modules
+        if (!framework_) {
+            return CommandResult(false, "Framework not available");
+        }
+
+        auto allModules = framework_->getModules();
+        if (allModules.empty()) {
+            return CommandResult(true, "No modules loaded");
+        }
+
+        std::ostringstream oss;
+        oss << "Module configurations (" << allModules.size() << " module(s)):\n\n";
+
+        int configuredCount = 0;
+        int notConfiguredCount = 0;
+
+        for (auto* module : allModules) {
+            if (!module) continue;
+
+            std::string symbolicName = module->getSymbolicName();
+            std::string version = module->getVersion().toString();
+            ModuleState state = module->getState();
+
+            // Module PID format: "module.{symbolic-name}" or just the symbolic name
+            std::string modulePid = symbolicName;
+
+            oss << "  Module: " << symbolicName << " (v" << version << ")\n";
+            oss << "  State: " << static_cast<int>(state) << " ";
+
+            switch (state) {
+                case ModuleState::ACTIVE: oss << "[RUNNING]"; break;
+                case ModuleState::RESOLVED: oss << "[STOPPED]"; break;
+                case ModuleState::INSTALLED: oss << "[INSTALLED]"; break;
+                default: oss << "[OTHER]"; break;
+            }
+            oss << "\n";
+
+            // Check if configuration exists
+            auto* config = configAdmin->getConfiguration(modulePid);
+            if (config && config->size() > 0) {
+                oss << "  Configuration: " << modulePid << "\n";
+                oss << "  Properties: " << config->size() << "\n";
+
+                const auto& props = config->getProperties();
+                auto allKeys = props.keys();
+
+                if (!allKeys.empty()) {
+                    oss << "  Values:\n";
+                    for (const auto& key : allKeys) {
+                        // Try different types and format accordingly
+                        std::string value;
+
+                        auto strVal = props.getAs<std::string>(key);
+                        if (strVal.has_value()) {
+                            value = strVal.value();
+                        } else {
+                            auto cstrVal = props.getAs<const char*>(key);
+                            if (cstrVal.has_value()) {
+                                value = cstrVal.value();
+                            } else {
+                                auto intVal = props.getAs<int>(key);
+                                if (intVal.has_value()) {
+                                    value = std::to_string(intVal.value());
+                                } else {
+                                    auto boolVal = props.getAs<bool>(key);
+                                    if (boolVal.has_value()) {
+                                        value = boolVal.value() ? "true" : "false";
+                                    } else {
+                                        auto doubleVal = props.getAs<double>(key);
+                                        if (doubleVal.has_value()) {
+                                            value = std::to_string(doubleVal.value());
+                                        } else {
+                                            auto longVal = props.getAs<long>(key);
+                                            if (longVal.has_value()) {
+                                                value = std::to_string(longVal.value());
+                                            } else {
+                                                value = "<unknown type>";
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        oss << "    " << key << " = " << value << "\n";
+                    }
+                }
+                configuredCount++;
+            } else {
+                oss << "  Configuration: Not configured\n";
+                notConfiguredCount++;
+            }
+            oss << "\n";
+        }
+
+        oss << "Summary:\n";
+        oss << "  Configured:     " << configuredCount << "\n";
+        oss << "  Not configured: " << notConfiguredCount << "\n";
+        oss << "  Total modules:  " << allModules.size() << "\n";
+
+        return CommandResult(true, oss.str());
+
+    } else if (action == "help") {
+        std::ostringstream oss;
+        oss << "Configuration commands:\n";
+        oss << "  config list              - List all configurations\n";
+        oss << "  config get <pid>         - Get configuration details\n";
+        oss << "  config set <pid> <k> <v> - Set configuration property\n";
+        oss << "  config modules           - Show configurations for all loaded modules\n";
+        oss << "  config help              - Show this help\n";
+        return CommandResult(true, oss.str());
+
+    } else {
+        return CommandResult(false, "Unknown config action: " + action + ". Use 'config help' for usage.");
+    }
 }
 
 CommandResult CommandHandler::handleExit(const std::vector<std::string>& args) {

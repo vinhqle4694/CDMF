@@ -85,6 +85,9 @@ set(CDMF_CORE_SOURCES
     impl/core/event_filter.cpp
     impl/core/framework_properties.cpp
     impl/core/event_dispatcher.cpp
+    impl/config/configuration_event.cpp
+    impl/config/configuration_impl.cpp
+    impl/config/configuration_admin_impl.cpp
 )
 
 if(CDMF_BUILD_SHARED_LIBS)

@@ -447,22 +447,22 @@ void SandboxIPC::receiverThreadFunc() {
         // Process received message
         switch (msg.type) {
             case SandboxMessageType::HEARTBEAT:
-                LOGD_FMT("Received HEARTBEAT from child: sandbox=" << sandbox_id_);
+                // LOGD_FMT("Received HEARTBEAT from child: sandbox=" << sandbox_id_);
                 break;
 
             case SandboxMessageType::STATUS_REPORT:
-                LOGD_FMT("Received STATUS_REPORT from child: sandbox=" << sandbox_id_
-                         << ", payload=" << msg.payload);
+                // LOGD_FMT("Received STATUS_REPORT from child: sandbox=" << sandbox_id_
+                //          << ", payload=" << msg.payload);
                 break;
 
             case SandboxMessageType::ERROR:
-                LOGD_FMT("Received ERROR from child: sandbox=" << sandbox_id_
-                         << ", error=" << msg.payload);
+                // LOGD_FMT("Received ERROR from child: sandbox=" << sandbox_id_
+                //          << ", error=" << msg.payload);
                 break;
 
             default:
-                LOGV_FMT("Received message type=" << static_cast<uint32_t>(msg.type)
-                         << " from child: sandbox=" << sandbox_id_);
+                // LOGV_FMT("Received message type=" << static_cast<uint32_t>(msg.type)
+                //          << " from child: sandbox=" << sandbox_id_);
                 break;
         }
     }

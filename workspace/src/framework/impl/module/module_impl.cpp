@@ -116,6 +116,46 @@ public:
     Module* getModule(uint64_t) const override { return nullptr; }
     Module* getModule(const std::string&) const override { return nullptr; }
 
+    // Configuration operations
+    Configuration* getConfiguration(const std::string& pid) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->getConfiguration(pid);
+            }
+        }
+        return nullptr;
+    }
+
+    void addConfigurationListener(IConfigurationListener* listener) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                frameworkContext->addConfigurationListener(listener);
+            }
+        }
+    }
+
+    bool removeConfigurationListener(IConfigurationListener* listener) override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->removeConfigurationListener(listener);
+            }
+        }
+        return false;
+    }
+
+    IConfigurationAdmin* getConfigurationAdmin() override {
+        if (framework_) {
+            IModuleContext* frameworkContext = framework_->getContext();
+            if (frameworkContext) {
+                return frameworkContext->getConfigurationAdmin();
+            }
+        }
+        return nullptr;
+    }
+
 private:
     Module* module_;
     Framework* framework_;

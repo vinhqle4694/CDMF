@@ -14,6 +14,8 @@
 #include "security/permission.h"
 #include "security/permission_types.h"
 #include "security/sandbox_manager.h"
+#include "config/configuration_admin.h"
+#include "config/configuration_admin_impl.h"
 #include "utils/log.h"
 #include <stdexcept>
 #include <algorithm>
@@ -85,6 +87,15 @@ public:
     Module* getModule(uint64_t moduleId) const override;
 
     Module* getModule(const std::string& symbolicName) const override;
+
+    // Configuration Operations
+    Configuration* getConfiguration(const std::string& pid = "") override;
+
+    void addConfigurationListener(IConfigurationListener* listener) override;
+
+    bool removeConfigurationListener(IConfigurationListener* listener) override;
+
+    IConfigurationAdmin* getConfigurationAdmin() override;
 
 private:
     FrameworkImpl* framework_;
@@ -161,6 +172,43 @@ public:
             // Initialize dependency resolver
             LOGI("  - Dependency resolver");
             dependencyResolver_ = std::make_unique<DependencyResolver>(moduleRegistry_.get());
+
+            // Initialize Configuration Admin
+            LOGI("  - Configuration Admin");
+            configurationAdmin_ = std::make_unique<ConfigurationAdminImpl>();
+
+            // Load framework configuration if path specified
+            std::string configPath = properties_.getString("framework.config.path", "");
+            if (!configPath.empty()) {
+                LOGI_FMT("  - Loading framework configuration from: " << configPath);
+                if (!configurationAdmin_->loadFromFile(configPath)) {
+                    LOGW_FMT("  - Failed to load framework configuration from: " << configPath);
+                }
+            }
+
+            // Create default framework configuration if it doesn't exist
+            LOGI("  - Calling getConfiguration");
+            auto* frameworkConfig = configurationAdmin_->getConfiguration("cdmf.framework");
+            LOGI("  - getConfiguration returned");
+            if (!frameworkConfig) {
+                LOGI("  - Creating default framework configuration");
+                frameworkConfig = configurationAdmin_->createConfiguration("cdmf.framework");
+                LOGI("  - createConfiguration returned");
+
+                // Populate with current framework properties
+                LOGI("  - Building configuration properties");
+                Properties configProps;
+                configProps.set("framework.id", properties_.getString("framework.id", "cdmf-framework"));
+                configProps.set("framework.version", "1.0.0");
+                configProps.set("framework.state", "ACTIVE");
+                configProps.set("event.thread.pool.size", properties_.getInt("framework.event.thread.pool.size", 8));
+                configProps.set("modules.auto.reload", properties_.getBool("framework.modules.auto.reload", false));
+                configProps.set("modules.reload.poll.interval", properties_.getInt("framework.modules.reload.poll.interval", 1000));
+
+                LOGI("  - Calling frameworkConfig->update()");
+                frameworkConfig->update(configProps);
+                LOGI("  - Framework configuration created");
+            }
 
             // Create framework context (system module context)
             LOGI("  - Framework context");
@@ -254,6 +302,17 @@ public:
             // Clear dependency resolver
             LOGI("  - Clearing dependency resolver");
             dependencyResolver_.reset();
+
+            // Save and clear Configuration Admin
+            LOGI("  - Clearing Configuration Admin");
+            std::string configPath = properties_.getString("framework.config.path", "");
+            if (!configPath.empty() && configurationAdmin_) {
+                LOGI_FMT("  - Saving framework configuration to: " << configPath);
+                if (!configurationAdmin_->saveToFile(configPath, "cdmf.framework")) {
+                    LOGW_FMT("  - Failed to save framework configuration to: " << configPath);
+                }
+            }
+            configurationAdmin_.reset();
 
             // Clear module registry
             LOGI("  - Clearing module registry");
@@ -777,6 +836,35 @@ public:
     }
 
     // ==================================================================
+    // Configuration Admin Access
+    // ==================================================================
+
+    IConfigurationAdmin* getConfigurationAdmin() override {
+        return configurationAdmin_.get();
+    }
+
+    bool loadConfiguration(const std::string& path) override {
+        if (!configurationAdmin_) {
+            LOGE("Configuration Admin not initialized");
+            return false;
+        }
+
+        LOGI_FMT("Loading configuration from: " << path);
+        return configurationAdmin_->loadFromFile(path);
+    }
+
+    bool saveConfiguration(const std::string& path) override {
+        if (!configurationAdmin_) {
+            LOGE("Configuration Admin not initialized");
+            return false;
+        }
+
+        LOGI_FMT("Saving configuration to: " << path);
+        // Save framework configuration (PID: "cdmf.framework")
+        return configurationAdmin_->saveToFile(path, "cdmf.framework");
+    }
+
+    // ==================================================================
     // Framework Listeners
     // ==================================================================
 
@@ -1088,6 +1176,7 @@ private:
     std::unique_ptr<DependencyResolver> dependencyResolver_;
     std::unique_ptr<IModuleContext> frameworkContext_;
     std::unique_ptr<ModuleReloader> moduleReloader_;
+    std::unique_ptr<IConfigurationAdmin> configurationAdmin_;
 
     // Framework listeners
     std::vector<IFrameworkListener*> listeners_;
@@ -1182,6 +1271,40 @@ Module* FrameworkContext::getModule(uint64_t moduleId) const {
 
 Module* FrameworkContext::getModule(const std::string& symbolicName) const {
     return framework_->getModule(symbolicName);
+}
+
+// ==================================================================
+// Configuration Operations
+// ==================================================================
+
+Configuration* FrameworkContext::getConfiguration(const std::string& pid) {
+    IConfigurationAdmin* admin = framework_->getConfigurationAdmin();
+    if (!admin) {
+        return nullptr;
+    }
+
+    // Use provided PID or generate default from framework
+    std::string configPid = pid.empty() ? "cdmf.framework" : pid;
+    return admin->getConfiguration(configPid);
+}
+
+void FrameworkContext::addConfigurationListener(IConfigurationListener* listener) {
+    IConfigurationAdmin* admin = framework_->getConfigurationAdmin();
+    if (admin) {
+        admin->addConfigurationListener(listener);
+    }
+}
+
+bool FrameworkContext::removeConfigurationListener(IConfigurationListener* listener) {
+    IConfigurationAdmin* admin = framework_->getConfigurationAdmin();
+    if (admin) {
+        return admin->removeConfigurationListener(listener);
+    }
+    return false;
+}
+
+IConfigurationAdmin* FrameworkContext::getConfigurationAdmin() {
+    return framework_->getConfigurationAdmin();
 }
 
 // ==================================================================

@@ -14,6 +14,11 @@
 
 namespace cdmf {
 
+// Forward declarations for configuration system
+class Configuration;
+class IConfigurationListener;
+class IConfigurationAdmin;
+
 /**
  * @brief Module context interface
  *
@@ -206,6 +211,60 @@ public:
      * @return Pointer to module, or nullptr if not found
      */
     virtual Module* getModule(const std::string& symbolicName) const = 0;
+
+    // ==================================================================
+    // Configuration Operations (PHASE_CONFIG - Configuration Admin)
+    // ==================================================================
+
+    /**
+     * @brief Get configuration for this module
+     *
+     * Returns the configuration object for this module. The configuration
+     * is identified by PID (Persistent Identifier).
+     *
+     * Default PID format: "module.{symbolic-name}"
+     *
+     * If no configuration exists for this module, returns nullptr.
+     * Use Configuration::update() to modify configuration properties.
+     *
+     * @param pid Configuration PID (default: auto-generate from module name)
+     * @return Pointer to configuration, or nullptr if not found
+     */
+    virtual Configuration* getConfiguration(const std::string& pid = "") = 0;
+
+    /**
+     * @brief Add a configuration listener
+     *
+     * Registers a listener to receive notifications when configurations
+     * are created, updated, or deleted.
+     *
+     * The listener is automatically removed when the module stops.
+     *
+     * @param listener Configuration listener (must not be null)
+     * @throws std::invalid_argument if listener is null
+     */
+    virtual void addConfigurationListener(IConfigurationListener* listener) = 0;
+
+    /**
+     * @brief Remove a configuration listener
+     *
+     * @param listener Configuration listener to remove
+     * @return true if removed, false if not registered
+     */
+    virtual bool removeConfigurationListener(IConfigurationListener* listener) = 0;
+
+    /**
+     * @brief Get the Configuration Admin service
+     *
+     * Provides access to the framework-wide Configuration Admin service.
+     * Use this to:
+     * - Create/delete configurations
+     * - Load/save configurations from/to files
+     * - List all configurations
+     *
+     * @return Pointer to Configuration Admin service
+     */
+    virtual IConfigurationAdmin* getConfigurationAdmin() = 0;
 };
 
 } // namespace cdmf

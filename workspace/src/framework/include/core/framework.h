@@ -14,6 +14,8 @@ namespace cdmf {
 // Forward declarations
 class IModuleContext;
 class Module;
+class IFrameworkListener;
+class IConfigurationAdmin;
 
 /**
  * @brief Framework interface - Main entry point for CDMF
@@ -230,10 +232,49 @@ public:
      * @param listener Framework event listener to remove
      */
     virtual void removeFrameworkListener(IFrameworkListener* listener) = 0;
-};
 
-// Forward declaration - defined in event_listener.h
-class IFrameworkListener;
+    // ==================================================================
+    // Configuration Admin Access
+    // ==================================================================
+
+    /**
+     * @brief Get the Configuration Admin service
+     *
+     * Provides access to the framework-wide configuration management service.
+     * Use Configuration Admin to:
+     * - Create and manage configurations
+     * - Load/save configurations from/to files
+     * - Register configuration listeners
+     *
+     * The Configuration Admin service is initialized during framework init()
+     * and available throughout the framework lifecycle.
+     *
+     * @return Pointer to Configuration Admin service
+     */
+    virtual IConfigurationAdmin* getConfigurationAdmin() = 0;
+
+    /**
+     * @brief Load framework configuration from file
+     *
+     * Loads the framework configuration (PID: "cdmf.framework") from
+     * a JSON file. This should typically be called before init().
+     *
+     * @param path Path to configuration JSON file
+     * @return true if loaded successfully, false on error
+     */
+    virtual bool loadConfiguration(const std::string& path) = 0;
+
+    /**
+     * @brief Save framework configuration to file
+     *
+     * Saves the framework configuration to a JSON file.
+     * Typically called during shutdown to persist any configuration changes.
+     *
+     * @param path Path to configuration JSON file
+     * @return true if saved successfully, false on error
+     */
+    virtual bool saveConfiguration(const std::string& path) = 0;
+};
 
 // ==================================================================
 // Factory Functions
